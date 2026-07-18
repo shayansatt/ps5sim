@@ -145,5 +145,3 @@ PowerShell
 InoriRus/Kyty — پروژه ps5sim بر پایه نسخه به شدت تغییر یافته‌ای (از طریق KytyPS5) از پروژه اصلی Kyty ساخته شده است.
 
 shadps4-emu/shadPS4 — مرجعی عالی برای درک مدل حافظه و پیاده‌سازی AVPlayer.
-
-</div>

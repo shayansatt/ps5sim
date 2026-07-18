@@ -32,7 +32,7 @@
 <table align="center">
   <tr>
     <td align="center">
-      <strong>Disgaea 6</strong><br>
+      <strong>GUI</strong><br>
       <img src="docs/screenshots/ps5-01.png" width="300" alt="اجرای بازی Disgaea 6 در ps5sim">
     </td>
     <td align="center">

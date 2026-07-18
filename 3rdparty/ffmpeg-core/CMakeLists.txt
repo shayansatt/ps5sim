@@ -38,6 +38,10 @@ execute_process(
 	WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}
 	OUTPUT_VARIABLE FFMPEG_GIT_SHA
 	OUTPUT_STRIP_TRAILING_WHITESPACE)
+if(NOT FFMPEG_GIT_SHA)
+	# Source tree is not a git checkout; matches the prebuilt already under externals/.
+	set(FFMPEG_GIT_SHA "94dde08")
+endif()
 
 # Download prebuilt ffmpeg
 set(FFMPEG_ZIP_PATH "${CMAKE_BINARY_DIR}/externals/ffmpeg-${FFMPEG_GIT_SHA}.zip")

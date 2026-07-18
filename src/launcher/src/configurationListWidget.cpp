@@ -4,6 +4,8 @@
 #include "compatibilityDatabase.h"
 #include "configuration.h"
 #include "configurationEditDialog.h"
+#include "ps5BootSplash.h"
+#include "ps5SettingsDialog.h"
 #include "configurationItem.h"
 #include "gameListTreeWidget.h"
 #include "mainDialog.h"
@@ -698,8 +700,7 @@ void ConfigurationListWidget::edit_global_settings() {
 	info.CopyEmulatorSettingsFrom(m_global_info);
 	info.name = tr("Global settings");
 
-	ConfigurationEditDialog dlg(info, this);
-	dlg.SetTitle(tr("Global settings"));
+	Ps5SettingsDialog dlg(info, this);
 	dlg.SetGameDirectories(m_game_dirs);
 
 	if (dlg.exec() == QDialog::Accepted) {
@@ -707,7 +708,21 @@ void ConfigurationListWidget::edit_global_settings() {
 		m_game_dirs = NormalizeGameDirectories(dlg.GetGameDirectories());
 		WriteSettings();
 		ScanGameDirectory();
+		Ps5SetHomeMusicEnabled(m_global_info.home_music_enabled);
 	}
+}
+
+void ConfigurationListWidget::FillGlobalSettings(Configuration* info) const {
+	info->CopyEmulatorSettingsFrom(m_global_info);
+}
+
+void ConfigurationListWidget::ApplyGlobalSettings(const Configuration& info,
+                                                  const QStringList&   dirs) {
+	m_global_info.CopyEmulatorSettingsFrom(info);
+	m_game_dirs = NormalizeGameDirectories(dirs);
+	WriteSettings();
+	ScanGameDirectory();
+	Ps5SetHomeMusicEnabled(m_global_info.home_music_enabled);
 }
 
 void ConfigurationListWidget::ClearCustomSettings(ConfigurationItem* item) {

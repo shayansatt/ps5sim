@@ -3,23 +3,29 @@
 #include "configuration.h"
 #include "configurationItem.h"
 #include "configurationListWidget.h"
+#include "ps5SettingsDialog.h"
 #include "trophyViewerDialog.h"
 
 #include <QDateTime>
 #include <QDir>
+#include <QEasingCurve>
 #include <QFileInfo>
 #include <QFrame>
+#include <QGraphicsOpacityEffect>
 #include <QHBoxLayout>
 #include <QIcon>
 #include <QKeyEvent>
 #include <QLabel>
 #include <QLinearGradient>
 #include <QPainter>
+#include <QParallelAnimationGroup>
+#include <QPropertyAnimation>
 #include <QPainterPath>
 #include <QPixmap>
 #include <QPushButton>
 #include <QScrollArea>
 #include <QScrollBar>
+#include <QSequentialAnimationGroup>
 #include <QTimer>
 #include <QVBoxLayout>
 
@@ -117,7 +123,13 @@ protected:
 		const int  radius = side * 22 / 100; // PS5-like strongly rounded corners
 		const QRect r((width() - side) / 2, (height() - side) / 2, side, side);
 
-		p.drawPixmap(r.topLeft(), RoundPixmap(LoadIcon(m_item->GetInfo(), side), side, radius));
+		// Icon pixmaps are cached per state: loading + rounding on every paint
+		// makes the boot/focus animations stutter badly.
+		QPixmap& cache = m_focused ? m_pm_focused : m_pm_normal;
+		if (cache.isNull()) {
+			cache = RoundPixmap(LoadIcon(m_item->GetInfo(), side), side, radius);
+		}
+		p.drawPixmap(r.topLeft(), cache);
 
 		if (m_focused) {
 			// Real PS5 focus: a thin white ring floating just outside the tile.
@@ -136,6 +148,8 @@ protected:
 private:
 	ConfigurationItem* m_item    = nullptr;
 	bool               m_focused = false;
+	QPixmap            m_pm_normal;
+	QPixmap            m_pm_focused;
 };
 
 // Small square system tile (PS Store / Explore / PS Plus / Library) shown in the
@@ -175,13 +189,20 @@ Ps5HomeScreen::Ps5HomeScreen(ConfigurationListWidget* backend, QWidget* parent)
 	setFocusPolicy(Qt::StrongFocus);
 	setAutoFillBackground(false);
 
+	// PS5 light-beam wallpaper, shown whenever no game artwork backs the screen.
+	m_home_bg.load(QStringLiteral(":/ps5/settings_bg.jpg"));
+
 	auto* root = new QVBoxLayout(this);
 	root->setContentsMargins(56, 28, 56, 0);
 	root->setSpacing(0);
 
 	// Top function bar: "Games / Media" tabs on the left; search / settings glyphs,
 	// profile avatar and the clock on the right (PS5 dashboard style).
-	auto* top = new QHBoxLayout();
+	// Wrapped in a widget so the boot intro can slide/fade it as one block.
+	m_top_bar = new QWidget(this);
+	m_top_bar->setStyleSheet(QStringLiteral("background: transparent;"));
+	auto* top = new QHBoxLayout(m_top_bar);
+	top->setContentsMargins(0, 0, 0, 0);
 	top->setSpacing(0);
 
 	auto* tab_games = new QLabel(tr("Games"), this);
@@ -245,7 +266,7 @@ Ps5HomeScreen::Ps5HomeScreen(ConfigurationListWidget* backend, QWidget* parent)
 	m_clock->setStyleSheet("color: #e6eefc; font-size: 17px; font-weight: 600;");
 	top->addWidget(m_clock, 0, Qt::AlignVCenter);
 
-	root->addLayout(top);
+	root->addWidget(m_top_bar);
 
 	root->addSpacing(34);
 
@@ -512,7 +533,28 @@ void Ps5HomeScreen::LaunchFocused() {
 }
 
 void Ps5HomeScreen::OpenSettingsForFocused() {
-	m_backend->OpenGlobalSettings();
+	if (m_settings_page != nullptr) {
+		return;
+	}
+
+	// PS5-style: settings open as a full-screen page inside the app, not a window.
+	m_backend->FillGlobalSettings(&m_settings_info);
+	auto* page = new Ps5SettingsDialog(m_settings_info, this);
+	page->setWindowFlags(Qt::Widget);
+	page->SetGameDirectories(m_backend->GetGameDirectories());
+	page->setGeometry(rect());
+	connect(page, &QDialog::finished, this, [this, page](int result) {
+		if (result == QDialog::Accepted) {
+			m_backend->ApplyGlobalSettings(m_settings_info, page->GetGameDirectories());
+		}
+		page->deleteLater();
+		m_settings_page = nullptr;
+		setFocus();
+	});
+	m_settings_page = page;
+	page->show();
+	page->raise();
+	page->setFocus();
 }
 
 void Ps5HomeScreen::ToggleFullscreen() {
@@ -561,39 +603,142 @@ void Ps5HomeScreen::keyPressEvent(QKeyEvent* event) {
 void Ps5HomeScreen::paintEvent(QPaintEvent* /*event*/) {
 	QPainter p(this);
 
-	// Base PS5 blue gradient.
-	QLinearGradient bg(0, 0, width(), height());
-	bg.setColorAt(0.0, QColor(16, 24, 46));
-	bg.setColorAt(0.5, QColor(23, 38, 74));
-	bg.setColorAt(1.0, QColor(12, 18, 36));
-	p.fillRect(rect(), bg);
+	// Backdrops are cached at the current window size: cover-scaling a large
+	// image (or re-loading pic0 from disk) on every repaint tanks the frame
+	// rate of the intro/focus animations.
 
-	// Focused game's pic0 as a dimmed backdrop, PS5-style.
+	// Focused game's pic0, if any, becomes the backdrop, PS5-style.
+	QString pic0_path;
 	if (m_focus >= 0 && m_focus < m_items.size()) {
 		const auto& info = m_items[m_focus]->GetInfo();
 		if (!info.basedir.isEmpty()) {
 			const QString pic0 =
 			    QDir(info.basedir).filePath(QStringLiteral("sce_sys/pic0.png"));
 			if (QFileInfo::exists(pic0)) {
-				QPixmap pm(pic0);
-				if (!pm.isNull()) {
-					pm = pm.scaled(size(), Qt::KeepAspectRatioByExpanding,
-					               Qt::SmoothTransformation);
-					p.setOpacity(0.35);
-					p.drawPixmap((width() - pm.width()) / 2, (height() - pm.height()) / 2, pm);
-					p.setOpacity(1.0);
-
-					QLinearGradient fade(0, 0, 0, height());
-					fade.setColorAt(0.0, QColor(10, 16, 32, 120));
-					fade.setColorAt(1.0, QColor(10, 16, 32, 235));
-					p.fillRect(rect(), fade);
-				}
+				pic0_path = pic0;
 			}
 		}
+	}
+	if (pic0_path != m_backdrop_path) {
+		m_backdrop_path = pic0_path;
+		m_backdrop_src  = QPixmap();
+		m_backdrop_scaled = QPixmap();
+		if (!m_backdrop_path.isEmpty()) {
+			m_backdrop_src.load(m_backdrop_path);
+		}
+	}
+
+	const auto cover_scaled = [this](const QPixmap& src, QPixmap& cache, QSize& made_for) {
+		if (made_for != size() || cache.isNull()) {
+			cache = src.scaled(size(), Qt::KeepAspectRatioByExpanding,
+			                   Qt::SmoothTransformation);
+			made_for = size();
+		}
+	};
+
+	if (m_backdrop_src.isNull()) {
+		// No game selected / no artwork: PS5 light-beam wallpaper (same as settings).
+		if (!m_home_bg.isNull()) {
+			cover_scaled(m_home_bg, m_home_bg_scaled, m_home_bg_for);
+			const int x = (m_home_bg_scaled.width() - width()) / 2;
+			const int y = (m_home_bg_scaled.height() - height()) / 2;
+			p.drawPixmap(0, 0, m_home_bg_scaled, x, y, width(), height());
+
+			// Gentle bottom darkening so tiles and text stay legible.
+			QLinearGradient fade(0, 0, 0, height());
+			fade.setColorAt(0.0, QColor(8, 12, 24, 40));
+			fade.setColorAt(1.0, QColor(8, 12, 24, 140));
+			p.fillRect(rect(), fade);
+			return;
+		}
+
+		// Fallback: base PS5 blue gradient.
+		QLinearGradient bg(0, 0, width(), height());
+		bg.setColorAt(0.0, QColor(16, 24, 46));
+		bg.setColorAt(0.5, QColor(23, 38, 74));
+		bg.setColorAt(1.0, QColor(12, 18, 36));
+		p.fillRect(rect(), bg);
+		return;
+	}
+
+	// Base PS5 blue gradient under the dimmed game art.
+	QLinearGradient bg(0, 0, width(), height());
+	bg.setColorAt(0.0, QColor(16, 24, 46));
+	bg.setColorAt(0.5, QColor(23, 38, 74));
+	bg.setColorAt(1.0, QColor(12, 18, 36));
+	p.fillRect(rect(), bg);
+
+	cover_scaled(m_backdrop_src, m_backdrop_scaled, m_backdrop_for);
+	p.setOpacity(0.35);
+	p.drawPixmap((width() - m_backdrop_scaled.width()) / 2,
+	             (height() - m_backdrop_scaled.height()) / 2, m_backdrop_scaled);
+	p.setOpacity(1.0);
+
+	QLinearGradient fade(0, 0, 0, height());
+	fade.setColorAt(0.0, QColor(10, 16, 32, 120));
+	fade.setColorAt(1.0, QColor(10, 16, 32, 235));
+	p.fillRect(rect(), fade);
+}
+
+void Ps5HomeScreen::PlayIntroAnimation() {
+	// PS5 boot reveal, matching the real console: the game row slides in from the
+	// right first, then the top bar drops down from above, and finally the hero
+	// texts, Play button and trophy card fade in.
+	const auto animate = [this](QWidget* w, QPoint offset, int delay, int duration) {
+		if (w == nullptr || !w->isVisible()) {
+			return;
+		}
+		auto* eff = new QGraphicsOpacityEffect(w);
+		w->setGraphicsEffect(eff);
+		eff->setOpacity(0.0);
+
+		const QPoint end   = w->pos();
+		const QPoint start = end + offset;
+		w->move(start);
+
+		auto* pos = new QPropertyAnimation(w, "pos", w);
+		pos->setStartValue(start);
+		pos->setEndValue(end);
+		pos->setDuration(duration);
+		pos->setEasingCurve(QEasingCurve::OutCubic);
+
+		auto* fade = new QPropertyAnimation(eff, "opacity", eff);
+		fade->setStartValue(0.0);
+		fade->setEndValue(1.0);
+		fade->setDuration(duration);
+		fade->setEasingCurve(QEasingCurve::OutCubic);
+
+		auto* group = new QParallelAnimationGroup();
+		group->addAnimation(pos);
+		group->addAnimation(fade);
+		connect(group, &QParallelAnimationGroup::finished, w, [w]() {
+			// Back to plain rendering: effects slightly soften text while active.
+			w->setGraphicsEffect(nullptr);
+		});
+
+		if (delay > 0) {
+			auto* seq = new QSequentialAnimationGroup(w);
+			seq->addPause(delay);
+			seq->addAnimation(group);
+			seq->start(QAbstractAnimation::DeleteWhenStopped);
+		} else {
+			group->setParent(w);
+			group->start(QAbstractAnimation::DeleteWhenStopped);
+		}
+	};
+
+	animate(m_scroll, QPoint(240, 0), 0, 650);    // game row: right -> left
+	animate(m_top_bar, QPoint(0, -60), 300, 500); // top bar: above -> down
+	for (QWidget* w: std::initializer_list<QWidget*> {m_hero_name, m_hero_meta, m_hero_status,
+	                                                  m_empty_hint, m_play_btn, m_trophy_card}) {
+		animate(w, QPoint(0, 0), 700, 500); // hero info: fade in place
 	}
 }
 
 void Ps5HomeScreen::resizeEvent(QResizeEvent* event) {
 	QWidget::resizeEvent(event);
+	if (m_settings_page != nullptr) {
+		m_settings_page->setGeometry(rect());
+	}
 	update();
 }

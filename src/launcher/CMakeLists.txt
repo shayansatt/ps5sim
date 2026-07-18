@@ -22,13 +22,33 @@ add_executable(launcher WIN32
 
 target_link_libraries(launcher Qt6::Concurrent Qt6::Network Qt6::Svg Qt6::Widgets)
 if(WIN32)
-target_link_libraries(launcher setupapi)
+target_link_libraries(launcher setupapi mfplay)
 endif()
 if (CLANG AND NOT PS5SIM_CLANG_CL)
 target_link_libraries(launcher pthread)
 endif()
 target_include_directories(launcher PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/include" "${CMAKE_CURRENT_SOURCE_DIR}/src")
 set_target_properties(launcher PROPERTIES AUTOUIC ON AUTOMOC ON AUTORCC ON)
+
+# PS5 boot video played by the splash screen; shipped next to the exe (too big for qrc).
+if(EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/resources/boot_splash.mp4")
+	add_custom_command(TARGET launcher POST_BUILD
+		COMMAND ${CMAKE_COMMAND} -E copy_if_different
+			"${CMAKE_CURRENT_SOURCE_DIR}/resources/boot_splash.mp4"
+			$<TARGET_FILE_DIR:launcher>/boot_splash.mp4
+	)
+	install(FILES "resources/boot_splash.mp4" DESTINATION .)
+endif()
+
+# Home-screen chime played right after the boot video ends.
+if(EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/resources/boot_chime.mp3")
+	add_custom_command(TARGET launcher POST_BUILD
+		COMMAND ${CMAKE_COMMAND} -E copy_if_different
+			"${CMAKE_CURRENT_SOURCE_DIR}/resources/boot_chime.mp3"
+			$<TARGET_FILE_DIR:launcher>/boot_chime.mp3
+	)
+	install(FILES "resources/boot_chime.mp3" DESTINATION .)
+endif()
 
 if(WIN32 AND NOT PS5SIM_CLANG_CL)
 	set_target_properties(launcher PROPERTIES LINK_FLAGS "${PS5SIM_LD_OPTIONS}")

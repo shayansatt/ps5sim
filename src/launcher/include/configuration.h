@@ -94,6 +94,7 @@ public:
 	ProfilerDirection      profiler_direction          = ProfilerDirection::None;
 	bool                   renderdoc_enabled           = false;
 	bool                   ngg_rectlist_draw_enabled   = true;
+	bool                   home_music_enabled          = true;
 
 	QString elf = QStringLiteral("eboot.bin");
 
@@ -112,6 +113,7 @@ public:
 		profiler_direction          = other.profiler_direction;
 		renderdoc_enabled           = other.renderdoc_enabled;
 		ngg_rectlist_draw_enabled   = other.ngg_rectlist_draw_enabled;
+		home_music_enabled          = other.home_music_enabled;
 	}
 
 	void CopyFrom(const Configuration& other) {
@@ -146,6 +148,7 @@ public:
 		PS5SIM_CFG_SET(profiler_direction);
 		PS5SIM_CFG_SET(renderdoc_enabled);
 		PS5SIM_CFG_SET(ngg_rectlist_draw_enabled);
+		PS5SIM_CFG_SET(home_music_enabled);
 		PS5SIM_CFG_SET(elf);
 	}
 
@@ -169,6 +172,7 @@ public:
 		PS5SIM_CFG_GET(renderdoc_enabled);
 		ngg_rectlist_draw_enabled =
 		    s->value("ngg_rectlist_draw_enabled", ngg_rectlist_draw_enabled).toBool();
+		home_music_enabled = s->value("home_music_enabled", home_music_enabled).toBool();
 		elf = s->value("elf", elf).toString();
 	}
 };

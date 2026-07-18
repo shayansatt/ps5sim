@@ -47,6 +47,9 @@ public:
 	[[nodiscard]] QList<ConfigurationItem*> GetItems() const;
 	void                                    RunItem(ConfigurationItem* item);
 	void                                    OpenGlobalSettings() { edit_global_settings(); }
+	void FillGlobalSettings(Configuration* info) const;
+	void ApplyGlobalSettings(const Configuration& info, const QStringList& dirs);
+	[[nodiscard]] bool IsHomeMusicEnabled() const { return m_global_info.home_music_enabled; }
 
 signals:
 

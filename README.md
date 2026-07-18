@@ -1,5 +1,7 @@
 # ps5sim
 
+[🇮🇷 فارسی](README-fa.md) | [🇺🇸 English](README.md)
+
 [![Platform](https://img.shields.io/badge/platform-Windows%20x64-0078D4.svg)](#system-requirements)
 [![Status](https://img.shields.io/badge/status-early%20development-orange.svg)](#current-status)
 [![License](https://img.shields.io/badge/license-GPL--2.0-blue.svg)](LICENSE)

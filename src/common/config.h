@@ -1,0 +1,22 @@
+#ifndef PS5SIM_COMMON_CONFIG_H_
+#define PS5SIM_COMMON_CONFIG_H_
+
+#define PS5SIM_PLATFORM_WINDOWS 1
+#define PS5SIM_PLATFORM_LINUX   5
+
+#define PS5SIM_COMPILER_GCC   1
+#define PS5SIM_COMPILER_CLANG 2
+
+#define PS5SIM_LINKER_LD       1
+#define PS5SIM_LINKER_LLD      2
+#define PS5SIM_LINKER_LLD_LINK 3
+
+#define PS5SIM_BUILD_DEBUG   1
+#define PS5SIM_BUILD_RELEASE 2
+
+#define PS5SIM_ENDIAN_BIG    1
+#define PS5SIM_ENDIAN_LITTLE 2
+
+#include "cmake_config.h"
+
+#endif /* PS5SIM_COMMON_CONFIG_H_ */

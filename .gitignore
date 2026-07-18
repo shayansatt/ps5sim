@@ -1,0 +1,58 @@
+# Visual Studio 2015 cache/options directory
+.vs/
+.idea/
+build/
+_Build/vscode-clang/
+
+# ==========================================
+# C++ and CMake Build Directories
+# ==========================================
+_Build/
+build/
+out/
+bin/
+lib/
+*.obj
+*.exe
+*.dll
+*.pdb
+*.lib
+*.a
+*.so
+*.dylib
+*.log
+
+# ==========================================
+# Qt & Launcher Autogen Files
+# ==========================================
+.qt/
+launcher_autogen/
+*.pro.user
+moc_*.cpp
+qrc_*.cpp
+ui_*.h
+
+# ==========================================
+# Game Data, Textures & Saves (CRITICAL)
+# ==========================================
+_DownloadData/
+_SaveData/
+_TempData/
+_Textures/
+install/_DownloadData/
+install/_SaveData/
+install/_TempData/
+install/_Textures/
+SAVEDATA00/
+*.pkg
+*.bin
+*.iso
+*.ucp
+
+# ==========================================
+# IDE and User Specific Files
+# ==========================================
+.vs/
+*.suo
+*.user
+.idea/

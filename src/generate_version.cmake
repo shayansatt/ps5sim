@@ -1,0 +1,8 @@
+#message("${GIT_EXECUTABLE}")
+if(GIT_EXECUTABLE)
+	execute_process(COMMAND ${GIT_EXECUTABLE} describe --tags --always OUTPUT_VARIABLE PS5SIM_GIT_VERSION)
+else()
+	set(PS5SIM_GIT_VERSION "unknown")
+endif()
+string(STRIP ${PS5SIM_GIT_VERSION} PS5SIM_GIT_VERSION)
+configure_file(${INPUT_FILE} ${OUTPUT_FILE})

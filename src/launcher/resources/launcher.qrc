@@ -1,0 +1,11 @@
+<RCC>
+    <qresource prefix="/ps5">
+        <file>store.svg</file>
+        <file>explore.svg</file>
+        <file>library.svg</file>
+        <file>psplus.svg</file>
+        <file alias="trophy_gold.png">trophy_gold_cut.png</file>
+        <file alias="trophy_silver.png">trophy_silver_cut.png</file>
+        <file alias="trophy_bronze.png">trophy_bronze_cut.png</file>
+    </qresource>
+</RCC>

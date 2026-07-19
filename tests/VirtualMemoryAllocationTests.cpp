@@ -1,11 +1,10 @@
 #include "common/commonSubsystem.h"
+#include "common/emulatorConfig.h"
+#include "common/logging/log.h"
 #include "common/subsystems.h"
 #include "common/threads.h"
-
-#include "common/emulatorConfig.h"
 #include "kernel/memory.h"
 #include "libs/errno.h"
-#include "common/logging/log.h"
 
 #include <cinttypes>
 #include <cstdint>
@@ -213,7 +212,8 @@ void TestFlexibleMapQueryAndWholeMunmap() {
 void TestPartialFlexibleMunmapAndFindNext() {
 	const char* test     = "PartialFlexibleMunmapAndFindNext";
 	const auto  baseline = AvailableFlexibleMemory(test);
-	const auto base = MapNamedFlexible(test, SceKernelPageSize * 3, SceKernelProtCpuRw, "prospero_part");
+	const auto  base =
+	    MapNamedFlexible(test, SceKernelPageSize * 3, SceKernelProtCpuRw, "prospero_part");
 
 	CheckOk(test,
 	        Libs::LibKernel::Memory::KernelMunmap(base + SceKernelPageSize, SceKernelPageSize),
@@ -300,8 +300,8 @@ void TestFixedNoOverwriteRejectsReservedRange() {
 
 	void*     fixed = reinterpret_cast<void*>(base);
 	const int ret   = Libs::LibKernel::Memory::KernelMapNamedFlexibleMemory(
-        &fixed, SceKernelPageSize, SceKernelProtCpuRw, SceKernelMapFixed | SceKernelMapNoOverwrite,
-        "reserved_blocked");
+	    &fixed, SceKernelPageSize, SceKernelProtCpuRw, SceKernelMapFixed | SceKernelMapNoOverwrite,
+	    "reserved_blocked");
 	const bool rejected = ret < OK;
 
 	if (ret == OK) {
@@ -319,7 +319,8 @@ void TestFixedNoOverwriteRejectsReservedRange() {
 	}
 
 	Check(test, rejected,
-	      "MAP_FIXED|MAP_NO_OVERWRITE should reject an already reserved virtual range");
+	      "MAP_FIXED|MAP_NO_OVERWRITE should reject an already reserved virtual "
+	      "range");
 
 	std::printf("[host]    %-48s ok\n", test);
 }
@@ -336,17 +337,17 @@ void TestDirectMapQueryOffsetAndPartialMunmap() {
 
 	void* addr = nullptr;
 	CheckOk(test,
-	        Libs::LibKernel::Memory::KernelMapNamedDirectMemory(&addr, SceKernelPageSize * 4,
-	                                                            SceKernelProtCpuRw, 0, phys_addr,
-	                                                            SceKernelPageSize, "prospero_direct"),
+	        Libs::LibKernel::Memory::KernelMapNamedDirectMemory(
+	            &addr, SceKernelPageSize * 4, SceKernelProtCpuRw, 0, phys_addr, SceKernelPageSize,
+	            "prospero_direct"),
 	        "KernelMapNamedDirectMemory");
-	const auto base = reinterpret_cast<uint64_t>(addr);
-	const auto phys = static_cast<uint64_t>(phys_addr);
+	const auto base  = reinterpret_cast<uint64_t>(addr);
+	const auto phys  = static_cast<uint64_t>(phys_addr);
 	void*      alias = nullptr;
 	CheckOk(test,
 	        Libs::LibKernel::Memory::KernelMapNamedDirectMemory(
-	            &alias, SceKernelPageSize * 4, SceKernelProtCpuRw, 0, phys_addr,
-	            SceKernelPageSize, "prospero_direct_alias"),
+	            &alias, SceKernelPageSize * 4, SceKernelProtCpuRw, 0, phys_addr, SceKernelPageSize,
+	            "prospero_direct_alias"),
 	        "KernelMapNamedDirectMemory(alias)");
 	const auto alias_base = reinterpret_cast<uint64_t>(alias);
 
@@ -367,7 +368,7 @@ void TestDirectMapQueryOffsetAndPartialMunmap() {
 	backing_read = 0;
 	Check(test,
 	      Libs::LibKernel::Memory::TryReadBacking(base + sizeof(uint64_t), &backing_read,
-	                                             sizeof(backing_read)),
+	                                              sizeof(backing_read)),
 	      "TryReadBacking should resolve an aliased physical offset");
 	Check(test, backing_read == backing_write,
 	      "backing reads and writes should preserve direct-memory aliasing");
@@ -416,8 +417,7 @@ void TestDirectMapQueryOffsetAndPartialMunmap() {
 	    test,
 	    Libs::LibKernel::Memory::KernelMunmap(base + SceKernelPageSize * 2, SceKernelPageSize * 2),
 	    "KernelMunmap(direct right cleanup)");
-	CheckOk(test,
-	        Libs::LibKernel::Memory::KernelMunmap(alias_base, SceKernelPageSize * 4),
+	CheckOk(test, Libs::LibKernel::Memory::KernelMunmap(alias_base, SceKernelPageSize * 4),
 	        "KernelMunmap(direct alias cleanup)");
 	CheckOk(test,
 	        Libs::LibKernel::Memory::KernelReleaseDirectMemory(phys_addr, SceKernelPageSize * 4),
@@ -435,8 +435,7 @@ void TestReleasedReserveCanBeReused() {
 	                                                           SceKernelPageSize),
 	        "KernelReserveVirtualRange");
 	const auto base = reinterpret_cast<uint64_t>(addr);
-	CheckOk(test, Libs::LibKernel::Memory::KernelMunmap(base, SceKernelPageSize),
-	        "KernelMunmap");
+	CheckOk(test, Libs::LibKernel::Memory::KernelMunmap(base, SceKernelPageSize), "KernelMunmap");
 
 	void* reused = reinterpret_cast<void*>(base);
 	CheckOk(test,
@@ -458,8 +457,8 @@ void TestMunmapAcrossAdjacentFlexibleMappings() {
 	void*       reserve  = nullptr;
 
 	CheckOk(test,
-	        Libs::LibKernel::Memory::KernelReserveVirtualRange(
-	            &reserve, SceKernelPageSize * 2, 0, SceKernelPageSize),
+	        Libs::LibKernel::Memory::KernelReserveVirtualRange(&reserve, SceKernelPageSize * 2, 0,
+	                                                           SceKernelPageSize),
 	        "KernelReserveVirtualRange");
 	const auto base = reinterpret_cast<uint64_t>(reserve);
 
@@ -471,8 +470,7 @@ void TestMunmapAcrossAdjacentFlexibleMappings() {
 	        "KernelMapNamedFlexibleMemory(left)");
 	CheckOk(test,
 	        Libs::LibKernel::Memory::KernelMapNamedFlexibleMemory(
-	            &right, SceKernelPageSize, SceKernelProtCpuRw, SceKernelMapFixed,
-	            "adjacent_right"),
+	            &right, SceKernelPageSize, SceKernelProtCpuRw, SceKernelMapFixed, "adjacent_right"),
 	        "KernelMapNamedFlexibleMemory(right)");
 
 	CheckOk(test, Libs::LibKernel::Memory::KernelMunmap(base, SceKernelPageSize * 2),
@@ -512,24 +510,26 @@ void TestNonzeroDirectOffsetAliasesSharedBacking() {
 	void* second_alias = nullptr;
 	CheckOk(test,
 	        Libs::LibKernel::Memory::KernelMapNamedDirectMemory(
-	            &first_alias, SceKernelPageSize, SceKernelProtCpuRw, 0, second,
-	            SceKernelPageSize, "prospero_nonzero_a"),
+	            &first_alias, SceKernelPageSize, SceKernelProtCpuRw, 0, second, SceKernelPageSize,
+	            "prospero_nonzero_a"),
 	        "KernelMapNamedDirectMemory(first alias)");
 	CheckOk(test,
 	        Libs::LibKernel::Memory::KernelMapNamedDirectMemory(
-	            &second_alias, SceKernelPageSize, SceKernelProtCpuRw, 0, second,
-	            SceKernelPageSize, "prospero_nonzero_b"),
+	            &second_alias, SceKernelPageSize, SceKernelProtCpuRw, 0, second, SceKernelPageSize,
+	            "prospero_nonzero_b"),
 	        "KernelMapNamedDirectMemory(second alias)");
 
 	*reinterpret_cast<uint64_t*>(first_alias) = 0x4b59545931364b42ull; // "PS5SIM" 16kb magic
 	Check(test, *reinterpret_cast<const uint64_t*>(second_alias) == 0x4b59545931364b42ull,
 	      "nonzero-offset mappings must share backing storage");
 
-	CheckOk(test, Libs::LibKernel::Memory::KernelMunmap(
-	                  reinterpret_cast<uint64_t>(first_alias), SceKernelPageSize),
+	CheckOk(test,
+	        Libs::LibKernel::Memory::KernelMunmap(reinterpret_cast<uint64_t>(first_alias),
+	                                              SceKernelPageSize),
 	        "KernelMunmap(first alias)");
-	CheckOk(test, Libs::LibKernel::Memory::KernelMunmap(
-	                  reinterpret_cast<uint64_t>(second_alias), SceKernelPageSize),
+	CheckOk(test,
+	        Libs::LibKernel::Memory::KernelMunmap(reinterpret_cast<uint64_t>(second_alias),
+	                                              SceKernelPageSize),
 	        "KernelMunmap(second alias)");
 	CheckOk(test, Libs::LibKernel::Memory::KernelReleaseDirectMemory(second, SceKernelPageSize),
 	        "KernelReleaseDirectMemory(second)");
@@ -581,16 +581,16 @@ void TestDirectPhysicalFreeRangeReuseAndCoalescing() {
 }
 
 void TestDirectAlignmentStaysWithinSearchRange() {
-	const char*        test        = "DirectAlignmentStaysWithinSearchRange";
+	const char*        test         = "DirectAlignmentStaysWithinSearchRange";
 	constexpr int64_t  search_start = SceKernelPageSize * 2;
 	constexpr uint64_t alignment    = SceKernelPageSize * 3;
 	const auto         search_end   = Libs::LibKernel::Memory::KernelGetDirectMemorySize();
 
 	int64_t phys_addr = -1;
 	CheckOk(test,
-	        Libs::LibKernel::Memory::KernelAllocateDirectMemory(
-	            search_start, search_end, SceKernelPageSize, alignment, SceKernelMtypeC,
-	            &phys_addr),
+	        Libs::LibKernel::Memory::KernelAllocateDirectMemory(search_start, search_end,
+	                                                            SceKernelPageSize, alignment,
+	                                                            SceKernelMtypeC, &phys_addr),
 	        "KernelAllocateDirectMemory(non-power-of-two alignment)");
 	Check(test, phys_addr >= search_start, "aligned allocation escaped below search_start");
 	Check(test, static_cast<uint64_t>(phys_addr) % alignment == 0,
@@ -600,7 +600,7 @@ void TestDirectAlignmentStaysWithinSearchRange() {
 
 	constexpr size_t out_of_range_alignment = UINT64_MAX - (SceKernelPageSize - 1);
 	phys_addr                               = -1;
-	const int result = Libs::LibKernel::Memory::KernelAllocateDirectMemory(
+	const int result                        = Libs::LibKernel::Memory::KernelAllocateDirectMemory(
 	    search_start, search_end, SceKernelPageSize, out_of_range_alignment, SceKernelMtypeC,
 	    &phys_addr);
 	CheckFailed(test, result, "KernelAllocateDirectMemory(out-of-range alignment)");
@@ -621,34 +621,32 @@ void TestDefaultDirectMapUsesSystemAddressRange() {
 
 	void* address = nullptr;
 	CheckOk(test,
-	        Libs::LibKernel::Memory::KernelMapNamedDirectMemory(
-	            &address, SceKernelPageSize, SceKernelProtCpuRw, 0, phys_addr,
-	            SceKernelPageSize, "system_direct"),
+	        Libs::LibKernel::Memory::KernelMapNamedDirectMemory(&address, SceKernelPageSize,
+	                                                            SceKernelProtCpuRw, 0, phys_addr,
+	                                                            SceKernelPageSize, "system_direct"),
 	        "KernelMapNamedDirectMemory");
 	Check(test, address != nullptr, "direct mapping returned null");
 #if PS5SIM_PLATFORM == PS5SIM_PLATFORM_WINDOWS
 	constexpr uint64_t SystemManagedMin = 0x0000040000ull;
 	constexpr uint64_t SystemManagedMax = 0x07fffeffffull;
 	const auto         mapped           = reinterpret_cast<uint64_t>(address);
-	Check(test, mapped >= SystemManagedMin &&
-	                mapped + SceKernelPageSize - 1 <= SystemManagedMax,
+	Check(test, mapped >= SystemManagedMin && mapped + SceKernelPageSize - 1 <= SystemManagedMax,
 	      "default direct mapping fell outside the system-managed host range");
 #endif
 
 	CheckOk(test,
 	        Libs::LibKernel::Memory::KernelMunmap(reinterpret_cast<uint64_t>(address),
-	                                             SceKernelPageSize),
+	                                              SceKernelPageSize),
 	        "KernelMunmap");
-	CheckOk(test,
-	        Libs::LibKernel::Memory::KernelReleaseDirectMemory(phys_addr, SceKernelPageSize),
+	CheckOk(test, Libs::LibKernel::Memory::KernelReleaseDirectMemory(phys_addr, SceKernelPageSize),
 	        "KernelReleaseDirectMemory");
 
 	std::printf("[host]    %-48s ok\n", test);
 }
 
 void TestLargeDirectMapAliasesAcrossChunks() {
-	const char*        test = "LargeDirectMapAliasesAcrossChunks";
-	constexpr uint64_t size = 0x400000;
+	const char*        test     = "LargeDirectMapAliasesAcrossChunks";
+	constexpr uint64_t size     = 0x400000;
 	constexpr uint64_t boundary = 0x200000;
 
 	int64_t phys_addr = 0;
@@ -669,19 +667,17 @@ void TestLargeDirectMapAliasesAcrossChunks() {
 	            &second_alias, size, SceKernelProtCpuRw, 0, phys_addr, 0x10000, "large_direct_b"),
 	        "KernelMapNamedDirectMemory(second alias)");
 
-	auto* first  = static_cast<uint8_t*>(first_alias);
-	auto* second = static_cast<uint8_t*>(second_alias);
+	auto* first                                        = static_cast<uint8_t*>(first_alias);
+	auto* second                                       = static_cast<uint8_t*>(second_alias);
 	*reinterpret_cast<uint64_t*>(first)                = 0x1111222233334444ull;
 	*reinterpret_cast<uint64_t*>(first + boundary - 8) = 0x5555666677778888ull;
 	*reinterpret_cast<uint64_t*>(first + boundary)     = 0x9999aaaabbbbccccull;
 	*reinterpret_cast<uint64_t*>(first + size - 8)     = 0xddddeeeeffff0001ull;
-	Check(test, *reinterpret_cast<const uint64_t*>(second) == 0x1111222233334444ull &&
-	                *reinterpret_cast<const uint64_t*>(second + boundary - 8) ==
-	                    0x5555666677778888ull &&
-	                *reinterpret_cast<const uint64_t*>(second + boundary) ==
-	                    0x9999aaaabbbbccccull &&
-	                *reinterpret_cast<const uint64_t*>(second + size - 8) ==
-	                    0xddddeeeeffff0001ull,
+	Check(test,
+	      *reinterpret_cast<const uint64_t*>(second) == 0x1111222233334444ull &&
+	          *reinterpret_cast<const uint64_t*>(second + boundary - 8) == 0x5555666677778888ull &&
+	          *reinterpret_cast<const uint64_t*>(second + boundary) == 0x9999aaaabbbbccccull &&
+	          *reinterpret_cast<const uint64_t*>(second + size - 8) == 0xddddeeeeffff0001ull,
 	      "large direct aliases diverged at a mapping chunk boundary");
 
 	CheckOk(test,
@@ -728,31 +724,301 @@ void TestDirectMapUnmapReusesHostAddress() {
 		        "KernelMunmap");
 	}
 
-	CheckOk(test,
-	        Libs::LibKernel::Memory::KernelReleaseDirectMemory(phys_addr, SceKernelPageSize),
+	CheckOk(test, Libs::LibKernel::Memory::KernelReleaseDirectMemory(phys_addr, SceKernelPageSize),
 	        "KernelReleaseDirectMemory");
 
+	std::printf("[host]    %-48s ok\n", test);
+}
+
+void TestFixedReserveReplacesPartialDirectMapping() {
+	const char*        test         = "FixedReserveReplacesPartialDirectMapping";
+	constexpr uint64_t page_count   = 13;
+	constexpr uint64_t keep_pages   = 5;
+	constexpr uint64_t total_size   = SceKernelPageSize * page_count;
+	constexpr uint64_t keep_size    = SceKernelPageSize * keep_pages;
+	constexpr uint64_t replace_size = total_size - keep_size;
+
+	int64_t phys_addr = 0;
+	CheckOk(test,
+	        Libs::LibKernel::Memory::KernelAllocateDirectMemory(
+	            SceKernelDirectMemoryStart, Libs::LibKernel::Memory::KernelGetDirectMemorySize(),
+	            total_size, SceKernelPageSize, SceKernelMtypeC, &phys_addr),
+	        "KernelAllocateDirectMemory");
+	void* alias = nullptr;
+	CheckOk(test,
+	        Libs::LibKernel::Memory::KernelMapNamedDirectMemory(
+	            &alias, total_size, SceKernelProtCpuRw, 0, phys_addr, SceKernelPageSize,
+	            "partial_replace_alias"),
+	        "KernelMapNamedDirectMemory(alias)");
+	*reinterpret_cast<uint64_t*>(reinterpret_cast<uint64_t>(alias) + keep_size) =
+	    0x4b595459414c4941ull; // "PS5SIMALIA"
+
+	void* reserve = nullptr;
+	CheckOk(test,
+	        Libs::LibKernel::Memory::KernelReserveVirtualRange(&reserve, total_size, 0,
+	                                                           SceKernelPageSize),
+	        "KernelReserveVirtualRange(container)");
+	const auto base = reinterpret_cast<uint64_t>(reserve);
+
+	void* mapped = reserve;
+	CheckOk(test,
+	        Libs::LibKernel::Memory::KernelMapNamedDirectMemory(
+	            &mapped, total_size, SceKernelProtCpuRw, SceKernelMapFixed | SceKernelMapNoCoalesce,
+	            phys_addr, SceKernelPageSize, "partial_replace_direct"),
+	        "KernelMapNamedDirectMemory");
+	Check(test, mapped == reserve, "fixed direct mapping moved");
+	*reinterpret_cast<uint64_t*>(base) = 0x4b5954594b454550ull; // "PS5SIMKEEP"
+
+	void* replacement = reinterpret_cast<void*>(base + keep_size);
+	CheckOk(test,
+	        Libs::LibKernel::Memory::KernelReserveVirtualRange(
+	            &replacement, replace_size, SceKernelMapFixed | SceKernelMapNoCoalesce,
+	            SceKernelPageSize),
+	        "KernelReserveVirtualRange(partial replacement)");
+	Check(test, reinterpret_cast<uint64_t>(replacement) == base + keep_size,
+	      "partial fixed reservation moved");
+	Check(test, *reinterpret_cast<uint64_t*>(base) == 0x4b5954594b454550ull,
+	      "partial replacement damaged the neighboring direct mapping");
+	ExpectRange(test, Query(test, base), base, base + keep_size, SceKernelProtCpuRw, 0, 1, 0, 1,
+	            "partial_replace_direct");
+	ExpectRange(test, Query(test, base + keep_size), base + keep_size, base + total_size, 0, 0, 0,
+	            0, 0);
+
+	void* remapped = replacement;
+	CheckOk(test,
+	        Libs::LibKernel::Memory::KernelMapNamedDirectMemory(
+	            &remapped, replace_size, SceKernelProtCpuRw,
+	            SceKernelMapFixed | SceKernelMapNoCoalesce, phys_addr + keep_size,
+	            SceKernelPageSize, "partial_replace_remap"),
+	        "KernelMapNamedDirectMemory(replacement reuse)");
+	Check(test, remapped == replacement, "replacement reservation was not reusable in place");
+	Check(test, *reinterpret_cast<uint64_t*>(remapped) == 0x4b595459414c4941ull,
+	      "replacement remap did not preserve its direct-memory backing offset");
+	*reinterpret_cast<uint64_t*>(remapped) = 0x4b59545952455553ull; // "PS5SIMREUS"
+	Check(test,
+	      *reinterpret_cast<uint64_t*>(reinterpret_cast<uint64_t>(alias) + keep_size) ==
+	          0x4b59545952455553ull,
+	      "replacement remap did not alias the original direct-memory backing");
+
+	CheckOk(test, Libs::LibKernel::Memory::KernelMunmap(base, keep_size),
+	        "KernelMunmap(direct remainder)");
+	CheckOk(test, Libs::LibKernel::Memory::KernelMunmap(base + keep_size, replace_size),
+	        "KernelMunmap(reused replacement)");
+	CheckOk(test,
+	        Libs::LibKernel::Memory::KernelMunmap(reinterpret_cast<uint64_t>(alias), total_size),
+	        "KernelMunmap(alias)");
+	CheckOk(test, Libs::LibKernel::Memory::KernelReleaseDirectMemory(phys_addr, total_size),
+	        "KernelReleaseDirectMemory");
+
+	std::printf("[host]    %-48s ok\n", test);
+}
+
+void TestFixedReserveRollbackSkipsUntouchedChunks() {
+	const char*        test       = "FixedReserveRollbackSkipsUntouchedChunks";
+	constexpr uint64_t part_size  = SceKernelPageSize * 2;
+	constexpr uint64_t total_size = part_size * 2;
+	int64_t            left_phys  = 0;
+	int64_t            right_phys = 0;
+
+	CheckOk(test,
+	        Libs::LibKernel::Memory::KernelAllocateDirectMemory(
+	            SceKernelDirectMemoryStart, Libs::LibKernel::Memory::KernelGetDirectMemorySize(),
+	            part_size, SceKernelPageSize, SceKernelMtypeC, &left_phys),
+	        "KernelAllocateDirectMemory(left)");
+	CheckOk(test,
+	        Libs::LibKernel::Memory::KernelAllocateDirectMemory(
+	            SceKernelDirectMemoryStart, Libs::LibKernel::Memory::KernelGetDirectMemorySize(),
+	            part_size, SceKernelPageSize, SceKernelMtypeC, &right_phys),
+	        "KernelAllocateDirectMemory(right)");
+
+	void* reserve = nullptr;
+	CheckOk(test,
+	        Libs::LibKernel::Memory::KernelReserveVirtualRange(&reserve, total_size, 0,
+	                                                           SceKernelPageSize),
+	        "KernelReserveVirtualRange");
+	const auto base  = reinterpret_cast<uint64_t>(reserve);
+	void*      left  = reserve;
+	void*      right = reinterpret_cast<void*>(base + part_size);
+	CheckOk(test,
+	        Libs::LibKernel::Memory::KernelMapNamedDirectMemory(
+	            &left, part_size, SceKernelProtCpuRw, SceKernelMapFixed | SceKernelMapNoCoalesce,
+	            left_phys, SceKernelPageSize, "rollback_left"),
+	        "KernelMapNamedDirectMemory(left)");
+	CheckOk(test,
+	        Libs::LibKernel::Memory::KernelMapNamedDirectMemory(
+	            &right, part_size, SceKernelProtCpuRw, SceKernelMapFixed | SceKernelMapNoCoalesce,
+	            right_phys, SceKernelPageSize, "rollback_right"),
+	        "KernelMapNamedDirectMemory(right)");
+	*reinterpret_cast<uint64_t*>(left)  = 0x4b5954594c454654ull; // "PS5SIMLEFT"
+	*reinterpret_cast<uint64_t*>(right) = 0x4b59545952474854ull; // "PS5SIMRGHT"
+
+	Libs::LibKernel::Memory::TestFailPhysicalMemoryUnmapAfter(1);
+	void* replacement = reserve;
+	CheckFailed(test,
+	            Libs::LibKernel::Memory::KernelReserveVirtualRange(
+	                &replacement, total_size, SceKernelMapFixed | SceKernelMapNoCoalesce,
+	                SceKernelPageSize),
+	            "KernelReserveVirtualRange(second-chunk rollback)");
+	Check(test, *reinterpret_cast<uint64_t*>(left) == 0x4b5954594c454654ull,
+	      "rollback did not restore the mutated first chunk");
+	Check(test, *reinterpret_cast<uint64_t*>(right) == 0x4b59545952474854ull,
+	      "rollback damaged the failing second chunk");
+	Check(test, !Libs::LibKernel::Memory::TestPlaceholderRangeIsFree(base, part_size),
+	      "first restored mapping remained recorded as a free placeholder");
+	Check(test, !Libs::LibKernel::Memory::TestPlaceholderRangeIsFree(base + part_size, part_size),
+	      "second restored mapping remained recorded as a free placeholder");
+
+	CheckOk(test, Libs::LibKernel::Memory::KernelMunmap(base, part_size), "KernelMunmap(left)");
+	CheckOk(test, Libs::LibKernel::Memory::KernelMunmap(base + part_size, part_size),
+	        "KernelMunmap(right)");
+	CheckOk(test, Libs::LibKernel::Memory::KernelReleaseDirectMemory(left_phys, part_size),
+	        "KernelReleaseDirectMemory(left)");
+	CheckOk(test, Libs::LibKernel::Memory::KernelReleaseDirectMemory(right_phys, part_size),
+	        "KernelReleaseDirectMemory(right)");
+
+	std::printf("[host]    %-48s ok\n", test);
+}
+
+void TestFixedReserveRollbackConsumesRestoredPlaceholder() {
+	const char*        test       = "FixedReserveRollbackConsumesRestoredPlaceholder";
+	constexpr uint64_t total_size = SceKernelPageSize * 4;
+
+	int64_t phys_addr = 0;
+	CheckOk(test,
+	        Libs::LibKernel::Memory::KernelAllocateDirectMemory(
+	            SceKernelDirectMemoryStart, Libs::LibKernel::Memory::KernelGetDirectMemorySize(),
+	            total_size, SceKernelPageSize, SceKernelMtypeC, &phys_addr),
+	        "KernelAllocateDirectMemory");
+
+	void* reserve = nullptr;
+	CheckOk(test,
+	        Libs::LibKernel::Memory::KernelReserveVirtualRange(&reserve, total_size, 0,
+	                                                           SceKernelPageSize),
+	        "KernelReserveVirtualRange");
+	const auto base = reinterpret_cast<uint64_t>(reserve);
+
+	void* mapped = reserve;
+	CheckOk(test,
+	        Libs::LibKernel::Memory::KernelMapNamedDirectMemory(
+	            &mapped, total_size, SceKernelProtCpuRw, SceKernelMapFixed | SceKernelMapNoCoalesce,
+	            phys_addr, SceKernelPageSize, "rollback_direct"),
+	        "KernelMapNamedDirectMemory");
+	*reinterpret_cast<uint64_t*>(base) = 0x4b595459524f4c4cull; // "PS5SIMROLL"
+
+	Libs::LibKernel::Memory::TestFailNextPhysicalMemoryUnmap();
+	void* replacement = reserve;
+	CheckFailed(test,
+	            Libs::LibKernel::Memory::KernelReserveVirtualRange(
+	                &replacement, total_size, SceKernelMapFixed | SceKernelMapNoCoalesce,
+	                SceKernelPageSize),
+	            "KernelReserveVirtualRange(injected rollback)");
+	Check(test, *reinterpret_cast<uint64_t*>(base) == 0x4b595459524f4c4cull,
+	      "rollback did not restore direct-memory contents");
+	Check(test, !Libs::LibKernel::Memory::TestPlaceholderRangeIsFree(base, total_size),
+	      "rollback left a mapped direct range recorded as a free placeholder");
+
+	CheckOk(test, Libs::LibKernel::Memory::KernelMunmap(base, total_size), "KernelMunmap");
+	CheckOk(test, Libs::LibKernel::Memory::KernelReleaseDirectMemory(phys_addr, total_size),
+	        "KernelReleaseDirectMemory");
+
+	std::printf("[host]    %-48s ok\n", test);
+}
+
+void TestFixedReserveRollbackRestoresDecommittedHostPages() {
+	const char*        test   = "FixedReserveRollbackRestoresDecommittedHostPages";
+	constexpr uint64_t size   = SceKernelPageSize * 3;
+	void*              mapped = nullptr;
+
+	CheckOk(test,
+	        Libs::LibKernel::Memory::KernelMapNamedFlexibleMemory(&mapped, size, SceKernelProtCpuRw,
+	                                                              0, "host_reserve_rollback"),
+	        "KernelMapNamedFlexibleMemory");
+	const auto base                    = reinterpret_cast<uint64_t>(mapped);
+	*reinterpret_cast<uint64_t*>(base) = 0x4b595459484f5354ull; // "PS5SIMHOST"
+	*reinterpret_cast<uint64_t*>(base + SceKernelPageSize * 2) =
+	    0x4b5954595441494cull; // "PS5SIMTAIL"
+
+	Libs::LibKernel::Memory::TestFailHostReservationAfter(1);
+	void* replacement = mapped;
+	CheckFailed(
+	    test,
+	    Libs::LibKernel::Memory::KernelReserveVirtualRange(
+	        &replacement, size, SceKernelMapFixed | SceKernelMapNoCoalesce, SceKernelPageSize),
+	    "KernelReserveVirtualRange(partial host reservation)");
+	Check(test, *reinterpret_cast<uint64_t*>(base) == 0x4b595459484f5354ull,
+	      "rollback did not restore the first flexible page");
+	Check(test, *reinterpret_cast<uint64_t*>(base + SceKernelPageSize * 2) == 0x4b5954595441494cull,
+	      "rollback damaged the flexible tail page");
+	ExpectRange(test, Query(test, base), base, base + size, SceKernelProtCpuRw, 1, 0, 0, 1,
+	            "host_reserve_rollback");
+
+	CheckOk(test, Libs::LibKernel::Memory::KernelMunmap(base, size), "KernelMunmap");
+	std::printf("[host]    %-48s ok\n", test);
+}
+
+void TestFixedReserveRangeAddRollbackKeepsPlaceholder() {
+	const char*        test      = "FixedReserveRangeAddRollbackKeepsPlaceholder";
+	constexpr uint64_t size      = SceKernelPageSize * 4;
+	int64_t            phys_addr = 0;
+
+	CheckOk(test,
+	        Libs::LibKernel::Memory::KernelAllocateDirectMemory(
+	            SceKernelDirectMemoryStart, Libs::LibKernel::Memory::KernelGetDirectMemorySize(),
+	            size, SceKernelPageSize, SceKernelMtypeC, &phys_addr),
+	        "KernelAllocateDirectMemory");
+	void* reserve = nullptr;
+	CheckOk(
+	    test,
+	    Libs::LibKernel::Memory::KernelReserveVirtualRange(&reserve, size, 0, SceKernelPageSize),
+	    "KernelReserveVirtualRange");
+	const auto base   = reinterpret_cast<uint64_t>(reserve);
+	void*      mapped = reserve;
+	CheckOk(test,
+	        Libs::LibKernel::Memory::KernelMapNamedDirectMemory(
+	            &mapped, size, SceKernelProtCpuRw, SceKernelMapFixed | SceKernelMapNoCoalesce,
+	            phys_addr, SceKernelPageSize, "range_add_rollback"),
+	        "KernelMapNamedDirectMemory");
+	*reinterpret_cast<uint64_t*>(mapped) = 0x4b59545952414e47ull; // "KTYRANG"
+
+	Libs::LibKernel::Memory::TestFailNextFixedReserveRangeRegistration();
+	void* replacement = mapped;
+	CheckFailed(
+	    test,
+	    Libs::LibKernel::Memory::KernelReserveVirtualRange(
+	        &replacement, size, SceKernelMapFixed | SceKernelMapNoCoalesce, SceKernelPageSize),
+	    "KernelReserveVirtualRange(range-add rollback)");
+	Check(test, *reinterpret_cast<uint64_t*>(mapped) == 0x4b59545952414e47ull,
+	      "range-add rollback did not restore direct-memory contents");
+	Check(test, !Libs::LibKernel::Memory::TestPlaceholderRangeIsFree(base, size),
+	      "range-add rollback left the restored mapping recorded as free");
+	ExpectRange(test, Query(test, base), base, base + size, SceKernelProtCpuRw, 0, 1, 0, 1,
+	            "range_add_rollback");
+
+	CheckOk(test, Libs::LibKernel::Memory::KernelMunmap(base, size), "KernelMunmap");
+	CheckOk(test, Libs::LibKernel::Memory::KernelReleaseDirectMemory(phys_addr, size),
+	        "KernelReleaseDirectMemory");
 	std::printf("[host]    %-48s ok\n", test);
 }
 
 void TestLargeHintedReserveHostsSmallDirectMap() {
 	const char* test = "LargeHintedReserveHostsSmallDirectMap";
 
-	constexpr uint64_t arena_base = 0x1000000000ull;
+	constexpr uint64_t arena_base  = 0x1000000000ull;
 	constexpr uint64_t arena_size  = 0x04000000ull;
 	constexpr uint64_t window_size = 0x00200000ull;
 
 	void* arena = reinterpret_cast<void*>(arena_base);
-	CheckOk(test, Libs::LibKernel::Memory::KernelReserveVirtualRange(
-	                  &arena, arena_size, 0, 0x200000),
+	CheckOk(test,
+	        Libs::LibKernel::Memory::KernelReserveVirtualRange(&arena, arena_size, 0, 0x200000),
 	        "KernelReserveVirtualRange(arena)");
 	const auto actual_arena = reinterpret_cast<uint64_t>(arena);
 	Check(test, actual_arena >= arena_base && (actual_arena & (0x200000 - 1u)) == 0,
 	      "large hinted reserve violated its search start or alignment");
 
 	void* window = reinterpret_cast<void*>(arena_base);
-	CheckOk(test, Libs::LibKernel::Memory::KernelReserveVirtualRange(
-	                  &window, window_size, 0, SceKernelPageSize),
+	CheckOk(test,
+	        Libs::LibKernel::Memory::KernelReserveVirtualRange(&window, window_size, 0,
+	                                                           SceKernelPageSize),
 	        "KernelReserveVirtualRange(window)");
 	Check(test, reinterpret_cast<uint64_t>(window) >= actual_arena + arena_size,
 	      "second hinted reserve overlaps the large arena");
@@ -773,17 +1039,17 @@ void TestLargeHintedReserveHostsSmallDirectMap() {
 	Check(test, mapped == window, "fixed direct mapping moved away from the reserved window");
 	*reinterpret_cast<uint64_t*>(mapped) = 0x4b59545952455356ull; // "PS5SIM" resv magic
 
-	CheckOk(test, Libs::LibKernel::Memory::KernelMunmap(
-	                  reinterpret_cast<uint64_t>(mapped), SceKernelPageSize * 2),
+	CheckOk(test,
+	        Libs::LibKernel::Memory::KernelMunmap(reinterpret_cast<uint64_t>(mapped),
+	                                              SceKernelPageSize * 2),
 	        "KernelMunmap(direct)");
-	CheckOk(test, Libs::LibKernel::Memory::KernelReleaseDirectMemory(
-	                  phys, SceKernelPageSize * 2),
+	CheckOk(test, Libs::LibKernel::Memory::KernelReleaseDirectMemory(phys, SceKernelPageSize * 2),
 	        "KernelReleaseDirectMemory");
-	CheckOk(test, Libs::LibKernel::Memory::KernelMunmap(
-	                  reinterpret_cast<uint64_t>(window), window_size),
+	CheckOk(test,
+	        Libs::LibKernel::Memory::KernelMunmap(reinterpret_cast<uint64_t>(window), window_size),
 	        "KernelMunmap(window reserve)");
-	CheckOk(test, Libs::LibKernel::Memory::KernelMunmap(
-	                  reinterpret_cast<uint64_t>(arena), arena_size),
+	CheckOk(test,
+	        Libs::LibKernel::Memory::KernelMunmap(reinterpret_cast<uint64_t>(arena), arena_size),
 	        "KernelMunmap(arena reserve)");
 
 	std::printf("[host]    %-48s ok\n", test);
@@ -1155,17 +1421,16 @@ void TestMemoryPoolCommitDecommitQueryFlags() {
 void TestProgramMemoryRegistrationAndProtection() {
 	const char* test = "ProgramMemoryRegistrationAndProtection";
 	const auto  size = SceKernelPageSize * 3;
-	const auto  base = Common::VirtualMemory::Alloc(0, size, Common::VirtualMemory::Mode::ReadWrite);
+	const auto base = Common::VirtualMemory::Alloc(0, size, Common::VirtualMemory::Mode::ReadWrite);
 	Check(test, base != 0, "program host allocation failed");
 
-	Libs::LibKernel::Memory::RegisterProgramMemory(base, size,
-	                                                Common::VirtualMemory::Mode::ReadWrite,
-	                                                "program_test");
-	ExpectRange(test, Query(test, base), base, base + size, SceKernelProtCpuRead | SceKernelProtCpuRw,
-	            0, 0, 0, 1, "program_test");
+	Libs::LibKernel::Memory::RegisterProgramMemory(
+	    base, size, Common::VirtualMemory::Mode::ReadWrite, "program_test");
+	ExpectRange(test, Query(test, base), base, base + size,
+	            SceKernelProtCpuRead | SceKernelProtCpuRw, 0, 0, 0, 1, "program_test");
 
-	Libs::LibKernel::Memory::UpdateProgramMemoryProtection(
-	    base, SceKernelPageSize, Common::VirtualMemory::Mode::Read);
+	Libs::LibKernel::Memory::UpdateProgramMemoryProtection(base, SceKernelPageSize,
+	                                                       Common::VirtualMemory::Mode::Read);
 	ExpectRange(test, Query(test, base), base, base + SceKernelPageSize, SceKernelProtCpuRead, 0, 0,
 	            0, 1, "program_test");
 
@@ -1208,6 +1473,11 @@ int main() {
 	RunTest(TestDefaultDirectMapUsesSystemAddressRange);
 	RunTest(TestLargeDirectMapAliasesAcrossChunks);
 	RunTest(TestDirectMapUnmapReusesHostAddress);
+	RunTest(TestFixedReserveReplacesPartialDirectMapping);
+	RunTest(TestFixedReserveRollbackConsumesRestoredPlaceholder);
+	RunTest(TestFixedReserveRollbackSkipsUntouchedChunks);
+	RunTest(TestFixedReserveRollbackRestoresDecommittedHostPages);
+	RunTest(TestFixedReserveRangeAddRollbackKeepsPlaceholder);
 	RunTest(TestLargeHintedReserveHostsSmallDirectMap);
 	RunTest(TestMemoryPoolAlignmentContracts);
 	RunTest(TestProsperoSampleMemoryPoolExpandCommit);

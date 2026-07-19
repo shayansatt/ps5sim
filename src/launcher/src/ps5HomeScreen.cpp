@@ -17,6 +17,7 @@
 #include <QKeyEvent>
 #include <QLabel>
 #include <QLinearGradient>
+#include <QMouseEvent>
 #include <QPainter>
 #include <QParallelAnimationGroup>
 #include <QPropertyAnimation>
@@ -28,6 +29,9 @@
 #include <QSequentialAnimationGroup>
 #include <QTimer>
 #include <QVBoxLayout>
+
+#include <functional>
+#include <utility>
 
 namespace {
 
@@ -102,7 +106,13 @@ public:
 		// (drawn outside the tile) is not clipped.
 		setFixedSize(TILE_FOCUS_W + 16, TILE_FOCUS_H + 16);
 		setAttribute(Qt::WA_Hover, true);
+		setCursor(Qt::PointingHandCursor);
 	}
+
+	// Mouse support: single click focuses the tile, double click launches.
+	// Plain std::function callbacks keep this file-local class moc-free.
+	void SetOnClicked(std::function<void()> cb) { m_on_clicked = std::move(cb); }
+	void SetOnDoubleClicked(std::function<void()> cb) { m_on_double_clicked = std::move(cb); }
 
 	void SetFocused(bool focused) {
 		if (m_focused != focused) {
@@ -145,11 +155,29 @@ protected:
 		}
 	}
 
+	void mousePressEvent(QMouseEvent* event) override {
+		if (event->button() == Qt::LeftButton && m_on_clicked) {
+			m_on_clicked();
+			return;
+		}
+		QWidget::mousePressEvent(event);
+	}
+
+	void mouseDoubleClickEvent(QMouseEvent* event) override {
+		if (event->button() == Qt::LeftButton && m_on_double_clicked) {
+			m_on_double_clicked();
+			return;
+		}
+		QWidget::mouseDoubleClickEvent(event);
+	}
+
 private:
 	ConfigurationItem* m_item    = nullptr;
 	bool               m_focused = false;
 	QPixmap            m_pm_normal;
 	QPixmap            m_pm_focused;
+	std::function<void()> m_on_clicked;
+	std::function<void()> m_on_double_clicked;
 };
 
 // Small square system tile (PS Store / Explore / PS Plus / Library) shown in the
@@ -442,7 +470,16 @@ void Ps5HomeScreen::RebuildTiles() {
 
 	int insert_at = 2; // between the leading (Store, Explore) and trailing system tiles
 	for (auto* item: m_items) {
-		auto* tile = new GameTile(item, m_scroll->widget());
+		auto*     tile  = new GameTile(item, m_scroll->widget());
+		const int index = static_cast<int>(m_tiles.size());
+		tile->SetOnClicked([this, index]() {
+			FocusIndex(index);
+			setFocus(); // keep keyboard navigation alive after a mouse click
+		});
+		tile->SetOnDoubleClicked([this, index]() {
+			FocusIndex(index);
+			LaunchFocused();
+		});
 		m_tiles_layout->insertWidget(insert_at++, tile);
 		m_tiles.append(tile);
 	}

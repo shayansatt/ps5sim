@@ -31,6 +31,18 @@ void PS5SIM_SYSV_ABI LoginDialogParamInitialize(void* param);
 
 } // namespace LoginDialog
 
+namespace SigninDialog {
+
+int PS5SIM_SYSV_ABI SigninDialogInitialize();
+int PS5SIM_SYSV_ABI SigninDialogTerminate();
+int PS5SIM_SYSV_ABI SigninDialogOpen(const void* param);
+int PS5SIM_SYSV_ABI SigninDialogClose();
+int PS5SIM_SYSV_ABI SigninDialogUpdateStatus();
+int PS5SIM_SYSV_ABI SigninDialogGetStatus();
+int PS5SIM_SYSV_ABI SigninDialogGetResult(void* result);
+
+} // namespace SigninDialog
+
 namespace SaveDataDialog {
 
 int PS5SIM_SYSV_ABI SaveDataDialogInitialize();

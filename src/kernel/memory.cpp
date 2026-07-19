@@ -713,6 +713,12 @@ private:
 	Common::Mutex      m_mutex;
 };
 
+#if defined(PS5SIM_VIRTUAL_MEMORY_ALLOCATION_TESTS)
+static uint32_t g_test_physical_memory_unmaps_before_failure = UINT32_MAX;
+static uint32_t g_test_host_reservation_pages_before_failure = UINT32_MAX;
+static bool     g_test_fail_next_fixed_reserve_range_add     = false;
+#endif
+
 class PhysicalMemory {
 public:
 	struct AllocatedBlock {
@@ -1322,6 +1328,16 @@ bool PhysicalMemory::ReleasePoolExpansion(uint64_t phys_addr, size_t len) {
 
 bool PhysicalMemory::Unmap(uint64_t vaddr, uint64_t size, GpuAccessMode* gpu_mode,
                            uint64_t* host_vaddr_to_release) {
+#if defined(PS5SIM_VIRTUAL_MEMORY_ALLOCATION_TESTS)
+	if (g_test_physical_memory_unmaps_before_failure == 0) {
+		g_test_physical_memory_unmaps_before_failure = UINT32_MAX;
+		return false;
+	}
+	if (g_test_physical_memory_unmaps_before_failure != UINT32_MAX) {
+		g_test_physical_memory_unmaps_before_failure--;
+	}
+#endif
+
 	EXIT_IF(gpu_mode == nullptr);
 
 	Common::LockGuard lock(m_mutex);
@@ -2943,17 +2959,35 @@ static bool ReserveFixedHostRange(uint64_t start, uint64_t size) {
 	}
 #endif
 
+#if defined(PS5SIM_VIRTUAL_MEMORY_ALLOCATION_TESTS)
+	for (uint64_t addr = start; addr < start + size; addr += PAGE_SIZE) {
+		if (g_test_host_reservation_pages_before_failure == 0) {
+			g_test_host_reservation_pages_before_failure = UINT32_MAX;
+			return false;
+		}
+		if (g_test_host_reservation_pages_before_failure != UINT32_MAX) {
+			g_test_host_reservation_pages_before_failure--;
+		}
+	}
+	g_test_host_reservation_pages_before_failure = UINT32_MAX;
+#endif
+
+	bool host_mutated = false;
 	for (uint64_t addr = start; addr < start + size; addr += PAGE_SIZE) {
 #if PS5SIM_PLATFORM == PS5SIM_PLATFORM_WINDOWS
 		MEMORY_BASIC_INFORMATION info {};
 		if (VirtualQuery(reinterpret_cast<const void*>(addr), &info, sizeof(info)) != 0) {
 			if (info.State == MEM_COMMIT) {
 				if (!VirtualMemory::Decommit(addr, PAGE_SIZE)) {
+					if (host_mutated) {
+						EXIT("reserve-fixed partial host decommit cannot be rolled back safely\n");
+					}
 					LOGF_COLOR(Log::Color::Red,
 					           "\t reserve-fixed replace: decommit failed at 0x%016" PRIx64 "\n",
 					           addr);
 					return false;
 				}
+				host_mutated = true;
 				continue;
 			}
 			if (info.State == MEM_RESERVE) {
@@ -2962,10 +2996,14 @@ static bool ReserveFixedHostRange(uint64_t start, uint64_t size) {
 		}
 #endif
 		if (!VirtualMemory::ReserveFixed(addr, PAGE_SIZE)) {
+			if (host_mutated) {
+				EXIT("reserve-fixed partial host reservation cannot be rolled back safely\n");
+			}
 			LOGF_COLOR(Log::Color::Red,
 			           "\t reserve-fixed replace: reserve failed at 0x%016" PRIx64 "\n", addr);
 			return false;
 		}
+		host_mutated = true;
 	}
 
 	return true;
@@ -2978,9 +3016,12 @@ static bool ReplaceFixedRangeWithReserved(uint64_t start, uint64_t size, bool* p
 
 	struct ReplacedChunk {
 		VirtualRanges::Range range {};
-		VirtualMemory::Mode  mode           = VirtualMemory::Mode::NoAccess;
-		GpuAccessMode        gpu_mode       = GpuAccessMode::NoAccess;
-		bool                 shared_backing = false;
+		VirtualMemory::Mode  mode                 = VirtualMemory::Mode::NoAccess;
+		GpuAccessMode        gpu_mode             = GpuAccessMode::NoAccess;
+		bool                 shared_backing       = false;
+		bool                 placeholder_restored = false;
+		bool                 host_unmapped        = false;
+		bool                 backend_unmapped     = false;
 	};
 
 	std::vector<ReplacedChunk> chunks;
@@ -3026,22 +3067,39 @@ static bool ReplaceFixedRangeWithReserved(uint64_t start, uint64_t size, bool* p
 			bool        backend_restored = true;
 
 			if (chunk.range.type == VirtualRangeType::Direct) {
-				host_restored =
-				    (chunk.shared_backing
-				         ? g_direct_memory_backing->MapFixed(chunk.range.start, chunk.range.size,
-				                                             chunk.range.offset, chunk.mode)
-				         : CommitFixedHostRange(chunk.range.start, chunk.range.size, chunk.mode));
-				backend_restored =
-				    g_physical_memory->Map(chunk.range.start, chunk.range.offset, chunk.range.size,
-				                           chunk.range.protection, chunk.mode, chunk.gpu_mode);
+				if (chunk.host_unmapped && chunk.placeholder_restored) {
+					const bool consumed =
+					    g_placeholder_address_space->Consume(chunk.range.start, chunk.range.size);
+					host_restored =
+					    consumed &&
+					    g_direct_memory_backing->MapExistingPlaceholderFixed(
+					        chunk.range.start, chunk.range.size, chunk.range.offset, chunk.mode);
+					if (consumed && !host_restored) {
+						g_placeholder_address_space->AddFree(chunk.range.start, chunk.range.size);
+					}
+				} else if (chunk.host_unmapped || !chunk.shared_backing) {
+					host_restored =
+					    (chunk.shared_backing ? g_direct_memory_backing->MapFixed(
+					                                chunk.range.start, chunk.range.size,
+					                                chunk.range.offset, chunk.mode)
+					                          : CommitFixedHostRange(chunk.range.start,
+					                                                 chunk.range.size, chunk.mode));
+				}
+				if (chunk.backend_unmapped) {
+					backend_restored = g_physical_memory->Map(
+					    chunk.range.start, chunk.range.offset, chunk.range.size,
+					    chunk.range.protection, chunk.mode, chunk.gpu_mode);
+				}
 			} else if (chunk.range.type == VirtualRangeType::Flexible ||
 			           chunk.range.type == VirtualRangeType::Stack ||
 			           chunk.range.type == VirtualRangeType::Pooled) {
 				host_restored =
 				    CommitFixedHostRange(chunk.range.start, chunk.range.size, chunk.mode);
-				backend_restored = g_flexible_memory->Map(chunk.range.start, chunk.range.size,
-				                                          chunk.range.protection, chunk.mode,
-				                                          chunk.gpu_mode, chunk.range.name);
+				if (chunk.backend_unmapped) {
+					backend_restored = g_flexible_memory->Map(chunk.range.start, chunk.range.size,
+					                                          chunk.range.protection, chunk.mode,
+					                                          chunk.gpu_mode, chunk.range.name);
+				}
 			}
 
 			const bool range_restored = g_virtual_ranges->Add(
@@ -3062,6 +3120,7 @@ static bool ReplaceFixedRangeWithReserved(uint64_t start, uint64_t size, bool* p
 	}
 	const bool gpu_unmapped = std::any_of(chunks.begin(), chunks.end(), [](const auto& chunk) {
 		return IsCommittedRangeType(chunk.range.type) &&
+		       chunk.gpu_mode != GpuAccessMode::NoAccess &&
 		       IsGpuAddressRange(chunk.range.start, chunk.range.size);
 	});
 	for (const auto& chunk: chunks) {
@@ -3079,22 +3138,28 @@ static bool ReplaceFixedRangeWithReserved(uint64_t start, uint64_t size, bool* p
 		if (chunk.range.type == VirtualRangeType::Direct) {
 			if (chunk.shared_backing) {
 				bool chunk_placeholder_restored = false;
-				if (!g_direct_memory_backing->Unmap(chunk.range.start, chunk.range.size, false,
+				if (!g_direct_memory_backing->Unmap(chunk.range.start, chunk.range.size, true,
 				                                    &chunk_placeholder_restored)) {
 					unmapped = false;
-				} else if (chunk_placeholder_restored) {
-					g_placeholder_address_space->AddFree(chunk.range.start, chunk.range.size);
+				} else {
+					chunk.host_unmapped = true;
+					if (chunk_placeholder_restored) {
+						g_placeholder_address_space->AddFree(chunk.range.start, chunk.range.size);
+						chunk.placeholder_restored = true;
+					}
 				}
 			}
 			if (unmapped) {
 				unmapped = g_physical_memory->Unmap(chunk.range.start, chunk.range.size, &gpu_mode);
-				chunk.gpu_mode = gpu_mode;
+				chunk.gpu_mode         = gpu_mode;
+				chunk.backend_unmapped = unmapped;
 			}
 		} else if (chunk.range.type == VirtualRangeType::Flexible ||
 		           chunk.range.type == VirtualRangeType::Stack ||
 		           chunk.range.type == VirtualRangeType::Pooled) {
 			unmapped = g_flexible_memory->Unmap(chunk.range.start, chunk.range.size, &gpu_mode);
-			chunk.gpu_mode = gpu_mode;
+			chunk.gpu_mode         = gpu_mode;
+			chunk.backend_unmapped = unmapped;
 		}
 
 		if (!unmapped) {
@@ -3108,7 +3173,9 @@ static bool ReplaceFixedRangeWithReserved(uint64_t start, uint64_t size, bool* p
 			           ", size=0x%016" PRIx64 ", type=%s\n",
 			           chunk.range.start, chunk.range.size,
 			           Common::EnumName(chunk.range.type).c_str());
-			restore_chunks();
+			if (!restore_chunks()) {
+				EXIT("reserve-fixed backend-unmap rollback failed\n");
+			}
 			return false;
 		}
 	}
@@ -3121,27 +3188,53 @@ static bool ReplaceFixedRangeWithReserved(uint64_t start, uint64_t size, bool* p
 			     " size=0x%016" PRIx64 "\n",
 			     start, size);
 		}
-		restore_chunks();
+		if (!restore_chunks()) {
+			EXIT("reserve-fixed host-reservation rollback failed\n");
+		}
 		return false;
 	}
 
-	if (!g_virtual_ranges->Add(start, size, 0, 0, 0, VirtualRangeType::Reserved, "anon", false,
-	                           *placeholder_backed)) {
+	bool range_added = false;
+#if defined(PS5SIM_VIRTUAL_MEMORY_ALLOCATION_TESTS)
+	if (g_test_fail_next_fixed_reserve_range_add) {
+		g_test_fail_next_fixed_reserve_range_add = false;
+	} else
+#endif
+	{
+		range_added = g_virtual_ranges->Add(start, size, 0, 0, 0, VirtualRangeType::Reserved,
+		                                    "anon", false, *placeholder_backed);
+	}
+	if (!range_added) {
 		if (gpu_unmapped) {
 			EXIT("reserve-fixed range registration failed after GPU unmap: addr=0x%016" PRIx64
 			     " size=0x%016" PRIx64 "\n",
 			     start, size);
 		}
-		if (*placeholder_backed) {
-			g_placeholder_address_space->ReleaseFree(start, size);
-		} else {
+		if (!*placeholder_backed) {
 			VirtualMemory::Free(start);
 		}
 		LOGF_COLOR(Log::Color::Red,
 		           "\t reserve-fixed replace: range add failed at 0x%016" PRIx64
 		           ", size=0x%016" PRIx64 "\n",
 		           start, size);
-		restore_chunks();
+		if (!restore_chunks()) {
+			EXIT("reserve-fixed range-registration rollback failed\n");
+		}
+		if (*placeholder_backed) {
+			auto free_start = start;
+			for (const auto& chunk: chunks) {
+				if (free_start < chunk.range.start &&
+				    !g_placeholder_address_space->ReleaseFree(free_start,
+				                                              chunk.range.start - free_start)) {
+					EXIT("reserve-fixed range-registration gap cleanup failed\n");
+				}
+				free_start = chunk.range.start + chunk.range.size;
+			}
+			if (free_start < start + size &&
+			    !g_placeholder_address_space->ReleaseFree(free_start, start + size - free_start)) {
+				EXIT("reserve-fixed range-registration tail cleanup failed\n");
+			}
+		}
 		return false;
 	}
 
@@ -3223,6 +3316,28 @@ int PS5SIM_SYSV_ABI KernelReserveVirtualRange(void** addr, size_t len, int flags
 
 	return OK;
 }
+
+#if defined(PS5SIM_VIRTUAL_MEMORY_ALLOCATION_TESTS)
+void TestFailNextPhysicalMemoryUnmap() {
+	TestFailPhysicalMemoryUnmapAfter(0);
+}
+
+void TestFailPhysicalMemoryUnmapAfter(uint32_t successful_unmaps) {
+	g_test_physical_memory_unmaps_before_failure = successful_unmaps;
+}
+
+void TestFailHostReservationAfter(uint32_t successful_pages) {
+	g_test_host_reservation_pages_before_failure = successful_pages;
+}
+
+void TestFailNextFixedReserveRangeRegistration() {
+	g_test_fail_next_fixed_reserve_range_add = true;
+}
+
+bool TestPlaceholderRangeIsFree(uint64_t vaddr, uint64_t size) {
+	return g_placeholder_address_space->TestContainsFree(vaddr, size);
+}
+#endif
 
 bool KernelHandleReservedRangeAccessViolation(uint64_t vaddr) {
 	std::lock_guard<std::recursive_mutex> memory_operation_lock(g_memory_operation_mutex);
@@ -3455,10 +3570,8 @@ int PS5SIM_SYSV_ABI KernelMprotect(const void* addr, size_t len, int prot) {
 		if (old_gpu_mode == GpuAccessMode::NoAccess) {
 			continue;
 		}
-		if ((old_range.type != VirtualRangeType::Stack &&
-		     old_range.type != VirtualRangeType::Code) ||
-		    !GetGpuResources().IsMapped(old_range.start, old_range.size)) {
-			EXIT("GPU protection transition requires tracked stack/code memory: addr=0x%016" PRIx64
+		if (!GetGpuResources().IsMapped(old_range.start, old_range.size)) {
+			EXIT("GPU protection transition requires tracked memory: addr=0x%016" PRIx64
 			     " size=0x%016" PRIx64 " type=%s\n",
 			     old_range.start, old_range.size, Common::EnumName(old_range.type).c_str());
 		}

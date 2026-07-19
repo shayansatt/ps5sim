@@ -12,8 +12,6 @@
 
 namespace Libs::Graphics {
 
-class CommandProcessorGuestAccessScope;
-
 inline constexpr uint32_t AcquireGcrGl2Writeback = 1u << 15u;
 
 bool TestWaitRegMemValue(uint64_t value, uint64_t ref, uint64_t mask, uint32_t func);
@@ -72,6 +70,21 @@ public:
 		}
 	}
 
+	void SubmitForReadback() {
+		if (!Active()) {
+			return;
+		}
+		SubmitCurrent();
+	}
+
+	void ResumeAfterReadback() {
+		if (!Active()) {
+			return;
+		}
+		Current()->WaitForFenceAndReset();
+		Current()->Begin();
+	}
+
 private:
 	CommandBuffer* SubmitCurrent() {
 		auto* submitted = Current();
@@ -107,22 +120,26 @@ public:
 
 	void Reset();
 
-	void              BufferInit();
-	void              BufferFlush();
-	void              BufferFlushAndWait();
-	void              BufferWait();
-	[[nodiscard]] int BeginReadbackTransaction(bool mutex_preowned) {
-		if (!mutex_preowned) {
-			m_mutex.Lock();
+	void BufferInit();
+	void BufferFlush();
+	void BufferFlushAndWait();
+	void BufferWait();
+	void BeginReadbackTransaction() {
+		m_mutex.Lock();
+		if (m_readback_active) {
+			EXIT("nested command-processor readback transaction\n");
 		}
-		m_scheduler.Flush();
-		m_scheduler.WaitAll();
-		return m_scheduler.Queue();
+		m_readback_active   = true;
+		m_readback_finished = false;
 	}
-	void EndReadbackTransaction(bool mutex_preowned) {
-		if (!mutex_preowned) {
-			m_mutex.Unlock();
+	void FinishReadbackTransaction();
+	void EndReadbackTransaction() {
+		if (!m_readback_active) {
+			EXIT("command-processor readback transaction is not active\n");
 		}
+		m_readback_active   = false;
+		m_readback_finished = false;
+		m_mutex.Unlock();
 	}
 
 	void RunLock() { m_run_mutex.Lock(); }
@@ -164,7 +181,6 @@ public:
 	                       uint32_t value);
 	void PrepareCpuFlip();
 	void SynchronizeGpu();
-	void SynchronizeGpuRange(uint64_t vaddr, uint64_t size);
 	void MemoryBarrier();
 	void TriggerEopEventAtEndOfPipe(uint32_t interrupt_context_id);
 	void RenderTextureBarrier(uint64_t vaddr, uint64_t size);
@@ -182,9 +198,6 @@ public:
 	void PopMarker() {}
 
 	void PrefetchL2(void* addr, uint32_t size) {}
-	void ClearGds(uint64_t dw_offset, uint32_t dw_num, uint32_t clear_value);
-	void ReadGds(uint32_t* dst, uint32_t dw_offset, uint32_t dw_size);
-
 	void ResetDeCe();
 	void WaitCe();
 	void WaitDeDiff(uint32_t diff);
@@ -208,7 +221,7 @@ public:
 
 	void Run(uint32_t* data, uint32_t num_dw);
 
-	void              SetQueue(int queue) { m_scheduler.SetQueue(queue); }
+	void              SetQueue(int queue);
 	[[nodiscard]] int GetQueue() const { return m_scheduler.Queue(); }
 
 	[[nodiscard]] const FlipInfo& GetFlip() const { return m_flip; }
@@ -218,8 +231,6 @@ public:
 	void                   SetSubmitId(uint64_t submit_id) { m_submit_id = submit_id; }
 
 private:
-	friend class CommandProcessorGuestAccessScope;
-
 	struct Counter {
 		Common::Mutex   mutex;
 		Common::CondVar cond_var;
@@ -231,6 +242,7 @@ private:
 	                      uint32_t cache_action, uint32_t event_index, uint32_t event_write_source,
 	                      void* dst_gpu_addr, T value, uint32_t interrupt_selector,
 	                      uint32_t interrupt_context_id);
+	void FinishCommandProcessors();
 
 	CommandBuffer*      CurrentBuffer() { return m_scheduler.Current(); }
 	void                CheckBuffer() const { m_scheduler.CheckActive(); }
@@ -250,8 +262,11 @@ private:
 	uint64_t         m_dispatch_indirect_args_base_addr = 0;
 	uint32_t         m_num_instances                    = 1;
 
-	Common::Mutex m_mutex;
-	Common::Mutex m_run_mutex;
+	inline static Common::Mutex                                             m_mutex;
+	inline static std::array<CommandProcessor*, GraphicContext::QUEUES_NUM> m_processors {};
+	inline static bool m_readback_active   = false;
+	inline static bool m_readback_finished = false;
+	Common::Mutex      m_run_mutex;
 
 	CommandScheduler m_scheduler;
 

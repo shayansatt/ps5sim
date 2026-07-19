@@ -4,11 +4,10 @@
 #include "common/abi.h"
 #include "common/common.h"
 #include "graphics/host_gpu/renderer/streamBuffer.h"
-#include "kernel/eventQueue.h"
+#include "graphics/host_gpu/vulkanCommon.h"
 
 #include <memory>
 #include <vector>
-#include <vulkan/vulkan_core.h>
 
 namespace Libs::Graphics {
 
@@ -40,6 +39,19 @@ struct HtileClearTarget {
 	uint64_t size    = 0;
 };
 
+enum class CommandBufferDebugOp : uint32_t {
+	DispatchDirect,
+	DrawIndex,
+	DrawIndexAuto,
+	EopWrite,
+	EopInterrupt,
+	EopWriteBack,
+	EopFlip,
+	EopWriteBackFlip,
+	EopOnlyFlip,
+	Unknown,
+};
+
 class FenceResourceRetainer {
 public:
 	FenceResourceRetainer() = default;
@@ -57,7 +69,7 @@ private:
 class CommandBuffer {
 public:
 	explicit CommandBuffer(int queue): m_queue(queue) { Allocate(); }
-	virtual ~CommandBuffer() { Free(); }
+	~CommandBuffer() { Free(); }
 
 	PS5SIM_CLASS_NO_COPY(CommandBuffer);
 
@@ -68,9 +80,9 @@ public:
 	void Begin() const;
 	void End() const;
 	void Execute();
-	void ExecuteWithSemaphore(VkSemaphore signal_semaphore = nullptr);
-	void ExecuteWithSemaphore(VkSemaphore wait_semaphore, VkPipelineStageFlags wait_stage,
-	                          VkSemaphore signal_semaphore);
+	void ExecuteWithSemaphore(vk::Semaphore signal_semaphore = nullptr);
+	void ExecuteWithSemaphore(vk::Semaphore wait_semaphore, vk::PipelineStageFlags wait_stage,
+	                          vk::Semaphore signal_semaphore);
 	void SetDebugInfo(uint32_t op, uint64_t submit_id, uint32_t arg0 = 0, uint32_t arg1 = 0,
 	                  uint32_t arg2 = 0, uint32_t arg3 = 0, uint64_t arg4 = 0);
 	void BeginRenderPass(VulkanFramebuffer* framebuffer, RenderColorInfo* colors,
@@ -83,29 +95,36 @@ public:
 	void RetainResourceUntilFence(std::shared_ptr<void> resource);
 	void RecycleDescriptorAfterFence(VulkanDescriptorSet* set);
 
-	[[nodiscard]] uint32_t GetIndex() const { return m_index; }
-	[[nodiscard]] int      GetQueue() const { return m_queue; }
-	VulkanCommandPool*     GetPool() { return m_pool; }
-	[[nodiscard]] bool     IsExecute() const { return m_execute; }
+	[[nodiscard]] vk::CommandBuffer Handle() const;
+	[[nodiscard]] int               GetQueue() const { return m_queue; }
+	[[nodiscard]] bool              IsExecute() const { return m_execute; }
+	[[nodiscard]] uint64_t GetRecordingGeneration() const { return m_recording_generation; }
 
 private:
 	friend class BufferCache;
 
-	void RecycleDescriptorsAfterFence();
+	void Submit(vk::Semaphore wait_semaphore, vk::PipelineStageFlags wait_stage,
+	            vk::Semaphore signal_semaphore);
+	[[nodiscard]] vk::Semaphore ResolveSignalSemaphore(vk::Semaphore semaphore) const;
+	void                        FinalizeFence(bool reset_recording);
+	void                        ReleaseResourcesAfterFence();
+	void                        DeleteBuffersAfterFence();
+	void                        RecycleDescriptorsAfterFence();
 
-	VulkanCommandPool*                m_pool            = nullptr;
-	uint32_t                          m_index           = static_cast<uint32_t>(-1);
-	int                               m_queue           = -1;
-	bool                              m_execute         = false;
-	bool                              m_fence_waited    = false;
-	uint64_t                          m_submit_seq      = 0;
-	uint32_t                          m_debug_op        = 0;
-	uint64_t                          m_debug_submit_id = 0;
-	uint32_t                          m_debug_arg0      = 0;
-	uint32_t                          m_debug_arg1      = 0;
-	uint32_t                          m_debug_arg2      = 0;
-	uint32_t                          m_debug_arg3      = 0;
-	uint64_t                          m_debug_arg4      = 0;
+	VulkanCommandPool*                m_pool                 = nullptr;
+	uint32_t                          m_index                = static_cast<uint32_t>(-1);
+	int                               m_queue                = -1;
+	bool                              m_execute              = false;
+	bool                              m_fence_waited         = false;
+	uint64_t                          m_submit_seq           = 0;
+	uint64_t                          m_recording_generation = 0;
+	uint32_t                          m_debug_op             = 0;
+	uint64_t                          m_debug_submit_id      = 0;
+	uint32_t                          m_debug_arg0           = 0;
+	uint32_t                          m_debug_arg1           = 0;
+	uint32_t                          m_debug_arg2           = 0;
+	uint32_t                          m_debug_arg3           = 0;
+	uint64_t                          m_debug_arg4           = 0;
 	std::vector<VulkanBuffer*>        m_delete_after_fence;
 	FenceResourceRetainer             m_fence_resources;
 	std::vector<VulkanDescriptorSet*> m_descriptor_sets_after_fence;
@@ -128,10 +147,7 @@ void RenderDispatchDirect(uint64_t submit_id, CommandBuffer* buffer, HW::Context
 
 void GraphicsRenderInit();
 void GraphicsRenderCreateContext();
-
-[[nodiscard]] bool GraphicsScaleReferenceClock(uint64_t host_ticks, uint64_t host_frequency,
-                                               uint64_t* value);
-[[nodiscard]] uint64_t GraphicsRenderReadReferenceClock();
+void GraphicsRenderReleaseThreadCommandPools();
 
 [[nodiscard]] bool ResolveComputeImageClear(const ShaderComputeInputInfo& input, uint32_t group_x,
                                             uint32_t group_y, uint32_t group_z, uint32_t mode,
@@ -140,61 +156,9 @@ void GraphicsRenderCreateContext();
 [[nodiscard]] bool ResolveHtileClearTarget(const HW::DepthRenderTarget& target,
                                            uint64_t descriptor_size, HtileClearTarget* resolved);
 
-void GraphicsRenderWriteAtEndOfPipe64(uint64_t submit_id, CommandBuffer* buffer,
-                                      uint64_t* dst_gpu_addr, uint64_t value);
-void GraphicsRenderWriteAtEndOfPipeClockCounter(uint64_t submit_id, CommandBuffer* buffer,
-                                                uint64_t* dst_gpu_addr);
-void GraphicsRenderWriteAtEndOfPipeClockCounterWithWriteBack(uint64_t       submit_id,
-                                                             CommandBuffer* buffer,
-                                                             uint64_t*      dst_gpu_addr);
-void GraphicsRenderWriteAtEndOfPipe32(uint64_t submit_id, CommandBuffer* buffer,
-                                      uint32_t* dst_gpu_addr, uint32_t value);
-void GraphicsRenderWriteAtEndOfPipeGds32(uint64_t submit_id, CommandBuffer* buffer,
-                                         uint32_t* dst_gpu_addr, uint32_t dw_offset,
-                                         uint32_t dw_num);
-uint64_t GraphicsRenderPrepareDisplayBufferFlip(CommandBuffer* buffer, int handle, int index,
-                                                int flip_mode, int64_t flip_arg);
-void GraphicsRenderWriteAtEndOfPipeWithInterruptWriteBackFlip32(
-    uint64_t submit_id, CommandBuffer* buffer, uint32_t* dst_gpu_addr, uint32_t value, int handle,
-    int index, int flip_mode, int64_t flip_arg, uint64_t request_id);
-void GraphicsRenderWriteAtEndOfPipeWithFlip32(uint64_t submit_id, CommandBuffer* buffer,
-                                              uint32_t* dst_gpu_addr, uint32_t value, int handle,
-                                              int index, int flip_mode, int64_t flip_arg,
-                                              uint64_t request_id);
-void GraphicsRenderWriteAtEndOfPipeOnlyFlip(uint64_t submit_id, CommandBuffer* buffer, int handle,
-                                            int index, int flip_mode, int64_t flip_arg,
-                                            uint64_t request_id);
-void GraphicsRenderWriteAtEndOfPipeWithWriteBack64(uint64_t submit_id, CommandBuffer* buffer,
-                                                   uint64_t* dst_gpu_addr, uint64_t value);
-void GraphicsRenderWriteAtEndOfPipeWithWriteBack32(uint64_t submit_id, CommandBuffer* buffer,
-                                                   uint32_t* dst_gpu_addr, uint32_t value);
-void GraphicsRenderWriteAtEndOfPipeWithInterruptWriteBack64(uint64_t       submit_id,
-                                                            CommandBuffer* buffer,
-                                                            uint64_t* dst_gpu_addr, uint64_t value,
-                                                            uint32_t context_id = 0);
-void GraphicsRenderWriteAtEndOfPipeWithInterruptWriteBack32(uint64_t       submit_id,
-                                                            CommandBuffer* buffer,
-                                                            uint32_t* dst_gpu_addr, uint32_t value,
-                                                            uint32_t context_id = 0);
-void GraphicsRenderWriteAtEndOfPipeWithInterrupt64(uint64_t submit_id, CommandBuffer* buffer,
-                                                   uint64_t* dst_gpu_addr, uint64_t value,
-                                                   uint32_t context_id = 0);
-void GraphicsRenderWriteAtEndOfPipeWithInterrupt32(uint64_t submit_id, CommandBuffer* buffer,
-                                                   uint32_t* dst_gpu_addr, uint32_t value,
-                                                   uint32_t context_id = 0);
 void GraphicsRenderMemoryBarrier(CommandBuffer* buffer);
 void GraphicsRenderTextureBarrier(CommandBuffer* buffer, uint64_t vaddr, uint64_t size);
 void GraphicsRenderDepthStencilBarrier(CommandBuffer* buffer, uint64_t vaddr, uint64_t size);
-void GraphicsRenderDeleteBuffers();
-void GraphicsRenderTriggerEopEventAtEndOfPipe(CommandBuffer* buffer, uint32_t context_id);
-
-int  GraphicsRenderAddEqEvent(LibKernel::EventQueue::KernelEqueue eq, int id, void* udata);
-int  GraphicsRenderDeleteEqEvent(LibKernel::EventQueue::KernelEqueue eq, int id);
-void GraphicsRenderTriggerAgcUserInterrupt();
-void GraphicsRenderTriggerEopEvent(uint32_t context_id);
-
-void GraphicsRenderClearGds(uint64_t dw_offset, uint32_t dw_num, uint32_t clear_value);
-void GraphicsRenderReadGds(uint32_t* dst, uint32_t dw_offset, uint32_t dw_size);
 
 } // namespace Libs::Graphics
 

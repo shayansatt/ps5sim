@@ -348,7 +348,7 @@ static uint32_t audioout2_context_grains(AudioOut2ContextHandle ctx) {
 	return samples_num;
 }
 
-static void audioout2_queue_context_audio(AudioOut2ContextHandle ctx) {
+static void audioout2_queue_context_audio(AudioOut2ContextHandle ctx, bool blocking) {
 	std::vector<AudioInternal::OutputParam> params;
 	params.reserve(AudioInternal::OUT_PORTS_MAX);
 
@@ -365,7 +365,8 @@ static void audioout2_queue_context_audio(AudioOut2ContextHandle ctx) {
 		return;
 	}
 
-	(void)AudioInternal::AudioOutOutputs(params.data(), static_cast<uint32_t>(params.size()));
+	(void)AudioInternal::AudioOutOutputs(params.data(), static_cast<uint32_t>(params.size()),
+	                                     blocking);
 }
 
 static void audioout2_close_audio_handle(int audio_handle) {
@@ -514,7 +515,7 @@ int PS5SIM_SYSV_ABI AudioOut2ContextPush(AudioOut2ContextHandle ctx, uint32_t bl
 				}
 				state->queued++;
 				g_audioout2_context_mutex.Unlock();
-				audioout2_queue_context_audio(ctx);
+				audioout2_queue_context_audio(ctx, blocking != 0);
 				return OK;
 			}
 		}

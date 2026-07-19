@@ -104,6 +104,33 @@ enum class ChannelOrder : uint32_t {
 	kAltReversed = 3,
 };
 
+// Maps a shader's logical RGBA export to the host color-attachment components. Two bits per
+// component keep this cheap to carry in shader and pipeline keys.
+struct ColorComponentMapping {
+	uint8_t packed = 0xe4u; // RGBA: 0, 1, 2, 3
+
+	[[nodiscard]] constexpr uint32_t Map(uint32_t component) const {
+		return component < 4u ? (packed >> (component * 2u)) & 0x3u : component;
+	}
+
+	[[nodiscard]] constexpr uint32_t ApplyMask(uint32_t mask) const {
+		uint32_t mapped = 0;
+		for (uint32_t component = 0; component < 4u; component++) {
+			mapped |= ((mask >> component) & 1u) << Map(component);
+		}
+		return mapped;
+	}
+
+	[[nodiscard]] constexpr bool IsIdentity() const { return packed == 0xe4u; }
+
+	bool operator==(const ColorComponentMapping&) const = default;
+};
+
+static_assert(sizeof(ColorComponentMapping) == sizeof(uint8_t));
+
+inline constexpr ColorComponentMapping ColorMappingAbgr {0x1bu}; // 3, 2, 1, 0
+inline constexpr ColorComponentMapping ColorMappingBgra {0xc6u}; // 2, 1, 0, 3
+
 enum class DepthFormat : uint32_t {
 	kInvalid = 0,
 	kZ16     = 1,

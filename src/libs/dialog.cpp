@@ -199,6 +199,114 @@ void PS5SIM_SYSV_ABI LoginDialogParamInitialize(void* param) {
 
 } // namespace LoginDialog
 
+namespace SigninDialog {
+
+LIB_NAME("SigninDialog", "SigninDialog");
+
+constexpr int SIGNIN_STATUS_NONE          = 0;
+constexpr int SIGNIN_STATUS_INITIALIZED   = 1;
+constexpr int SIGNIN_STATUS_RUNNING       = 2;
+constexpr int SIGNIN_STATUS_FINISHED      = 3;
+constexpr int SIGNIN_RESULT_USER_CANCELED = 1;
+
+constexpr int SIGNIN_ERROR_NOT_INITIALIZED     = static_cast<int>(0x81350001u);
+constexpr int SIGNIN_ERROR_ALREADY_INITIALIZED = static_cast<int>(0x81350002u);
+constexpr int SIGNIN_ERROR_PARAM_INVALID       = static_cast<int>(0x81350003u);
+constexpr int SIGNIN_ERROR_INVALID_STATE       = static_cast<int>(0x81350005u);
+
+struct SigninDialogResult {
+	int32_t result;
+	int32_t reserved[3];
+};
+
+struct SigninDialogParam {
+	int32_t size;
+	int32_t user_id;
+	int32_t reserved[2];
+};
+
+static_assert(sizeof(SigninDialogResult) == 16);
+static_assert(sizeof(SigninDialogParam) == 16);
+
+static int g_signin_status = SIGNIN_STATUS_NONE;
+
+int PS5SIM_SYSV_ABI SigninDialogInitialize() {
+	PRINT_NAME();
+	if (g_signin_status != SIGNIN_STATUS_NONE) {
+		return SIGNIN_ERROR_ALREADY_INITIALIZED;
+	}
+	g_signin_status = SIGNIN_STATUS_INITIALIZED;
+	return OK;
+}
+
+int PS5SIM_SYSV_ABI SigninDialogTerminate() {
+	PRINT_NAME();
+	if (g_signin_status == SIGNIN_STATUS_NONE) {
+		return SIGNIN_ERROR_NOT_INITIALIZED;
+	}
+	g_signin_status = SIGNIN_STATUS_NONE;
+	return OK;
+}
+
+int PS5SIM_SYSV_ABI SigninDialogOpen(const void* param) {
+	PRINT_NAME();
+	if (g_signin_status != SIGNIN_STATUS_INITIALIZED && g_signin_status != SIGNIN_STATUS_FINISHED) {
+		return SIGNIN_ERROR_INVALID_STATE;
+	}
+	if (param == nullptr ||
+	    static_cast<const SigninDialogParam*>(param)->size != sizeof(SigninDialogParam)) {
+		return SIGNIN_ERROR_PARAM_INVALID;
+	}
+	g_signin_status = SIGNIN_STATUS_RUNNING;
+	return OK;
+}
+
+int PS5SIM_SYSV_ABI SigninDialogClose() {
+	PRINT_NAME();
+	if (g_signin_status == SIGNIN_STATUS_NONE) {
+		return SIGNIN_ERROR_NOT_INITIALIZED;
+	}
+	if (g_signin_status != SIGNIN_STATUS_RUNNING && g_signin_status != SIGNIN_STATUS_FINISHED) {
+		return SIGNIN_ERROR_INVALID_STATE;
+	}
+	g_signin_status = SIGNIN_STATUS_FINISHED;
+	return OK;
+}
+
+int PS5SIM_SYSV_ABI SigninDialogUpdateStatus() {
+	PRINT_NAME();
+	if (g_signin_status == SIGNIN_STATUS_RUNNING) {
+		g_signin_status = SIGNIN_STATUS_FINISHED;
+	}
+	return g_signin_status;
+}
+
+int PS5SIM_SYSV_ABI SigninDialogGetStatus() {
+	PRINT_NAME();
+	return g_signin_status;
+}
+
+int PS5SIM_SYSV_ABI SigninDialogGetResult(void* result) {
+	PRINT_NAME();
+	if (g_signin_status == SIGNIN_STATUS_NONE) {
+		return SIGNIN_ERROR_NOT_INITIALIZED;
+	}
+	if (g_signin_status != SIGNIN_STATUS_FINISHED) {
+		return SIGNIN_ERROR_INVALID_STATE;
+	}
+	if (result == nullptr) {
+		return SIGNIN_ERROR_PARAM_INVALID;
+	}
+	auto* r        = static_cast<SigninDialogResult*>(result);
+	r->result      = SIGNIN_RESULT_USER_CANCELED;
+	r->reserved[0] = 0;
+	r->reserved[1] = 0;
+	r->reserved[2] = 0;
+	return OK;
+}
+
+} // namespace SigninDialog
+
 namespace SaveDataDialog {
 
 LIB_NAME("SaveDataDialog", "SaveDataDialog");

@@ -8,8 +8,8 @@
 
 namespace Libs::Graphics {
 
-// Owner-tracked shared buffer/image transaction. External faults pause GPU submissions before
-// taking this mutex; synchronous command-processor accesses reuse their already-owned transaction.
+// Owner-tracked shared buffer/image transaction. External faults pause GPU submissions first;
+// command-processor faults drain their queue before entering this transaction.
 class ResourceMutex final {
 public:
 	class FaultScope final {
@@ -27,8 +27,8 @@ public:
 	~ResourceMutex();
 	PS5SIM_CLASS_NO_COPY(ResourceMutex);
 
-	void lock();
-	void unlock();
+	void               lock();
+	void               unlock();
 	[[nodiscard]] bool IsOwnedByCurrentThread();
 
 private:

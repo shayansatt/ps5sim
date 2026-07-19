@@ -56,3 +56,9 @@ SAVEDATA00/
 *.suo
 *.user
 .idea/
+
+# ==========================================
+# Backup  Files
+# ==========================================
+src_backup_premerge/
+tests_backup_premerge/

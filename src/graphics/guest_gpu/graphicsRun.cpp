@@ -15,6 +15,7 @@
 #include "graphics/host_gpu/objects/label.h"
 #include "graphics/host_gpu/renderer/render.h"
 #include "graphics/host_gpu/renderer/renderContext.h"
+#include "graphics/host_gpu/renderer/sync.h"
 #include "graphics/presentation/displayBuffer.h"
 #include "graphics/presentation/videoOut.h"
 #include "graphics/presentation/window.h"
@@ -33,19 +34,9 @@
 
 namespace Libs::Graphics {
 
-enum class CommandProcessorGuestAccess : uint32_t {
-	None,
-	WaitPoll,
-	DirectFence,
-};
-
-static thread_local CommandProcessor*           g_current_run_cp         = nullptr;
-static thread_local uint32_t                    g_submission_pause_depth = 0;
-static thread_local bool                        g_gpu_mutex_owned        = false;
-static thread_local bool                        g_cp_readback_owned      = false;
-static thread_local bool                        g_cp_readback_preowned   = false;
-static thread_local CommandProcessorGuestAccess g_guest_memory_access =
-    CommandProcessorGuestAccess::None;
+static thread_local CommandProcessor* g_current_run_cp         = nullptr;
+static thread_local uint32_t          g_submission_pause_depth = 0;
+static thread_local bool              g_gpu_mutex_owned        = false;
 
 class GpuMutexLock final {
 public:
@@ -68,54 +59,13 @@ private:
 	Common::Mutex& m_mutex;
 };
 
-class CommandProcessorGuestAccessScope final {
-public:
-	CommandProcessorGuestAccessScope(CommandProcessorGuestAccess access, uint64_t vaddr,
-	                                 uint64_t size) {
-		if (access == CommandProcessorGuestAccess::None ||
-		    g_guest_memory_access != CommandProcessorGuestAccess::None ||
-		    g_current_run_cp == nullptr) {
-			EXIT("invalid nested command-processor guest-memory access\n");
-		}
-		if (g_render_ctx == nullptr) {
-			EXIT("command-processor guest-memory access has no render context\n");
-		}
-		m_cp = g_current_run_cp;
-		if (access == CommandProcessorGuestAccess::WaitPoll) {
-			// Preserve serialized scheduler semantics: a poll owns the command processor before it
-			// enters the shared buffer/texture transaction, and releases both before yielding.
-			m_cp->m_mutex.Lock();
-			m_cp_mutex_owned = true;
-		}
-		m_resource_lock =
-		    g_render_ctx->GetGpuResources()->LockCommandProcessorGuestAccess(vaddr, size);
-		g_guest_memory_access = access;
-	}
-	~CommandProcessorGuestAccessScope() {
-		if (g_guest_memory_access == CommandProcessorGuestAccess::None ||
-		    !m_resource_lock.owns_lock() || m_cp == nullptr) {
-			EXIT("command-processor guest-memory access scope is not active\n");
-		}
-		g_guest_memory_access = CommandProcessorGuestAccess::None;
-		m_resource_lock.unlock();
-		if (m_cp_mutex_owned) {
-			m_cp->m_mutex.Unlock();
-		}
-	}
-
-private:
-	CommandProcessor*               m_cp             = nullptr;
-	bool                            m_cp_mutex_owned = false;
-	std::unique_lock<ResourceMutex> m_resource_lock;
-	PS5SIM_CLASS_NO_COPY(CommandProcessorGuestAccessScope);
-};
-
 struct OwnedCmdBuffer {
 	std::vector<uint32_t> storage;
 	uint32_t*             data   = nullptr;
 	uint32_t              num_dw = 0;
 
 	OwnedCmdBuffer() = default;
+	OwnedCmdBuffer(const uint32_t* src, uint32_t count) { Assign(src, count); }
 
 	OwnedCmdBuffer(const OwnedCmdBuffer& other): storage(other.storage), num_dw(other.num_dw) {
 		data = (storage.empty() ? other.data : storage.data());
@@ -165,9 +115,8 @@ public:
 
 	PS5SIM_CLASS_NO_COPY(GraphicsRing);
 
-	void Submit(uint32_t* cmd_draw_buffer, uint32_t num_draw_dw, uint32_t* cmd_const_buffer,
-	            uint32_t num_const_dw, int handle, int index, int flip_mode, int64_t flip_arg,
-	            bool trigger_agc_interrupt_on_done);
+	void Submit(OwnedCmdBuffer draw_buffer, OwnedCmdBuffer const_buffer, int handle, int index,
+	            int flip_mode, int64_t flip_arg, bool trigger_agc_interrupt_on_done);
 	void SubmitFlipPreparation();
 	void Done();
 	void WaitForIdle();
@@ -217,7 +166,7 @@ public:
 
 	PS5SIM_CLASS_NO_COPY(ComputeRing);
 
-	void Submit(uint32_t* cmd_buffer, uint32_t num_dw, bool trigger_agc_interrupt_on_done);
+	void Submit(OwnedCmdBuffer buffer, bool trigger_agc_interrupt_on_done);
 	void Done();
 	void WaitForIdle();
 	bool IsIdle();
@@ -311,15 +260,18 @@ void GraphicsRunInit() {
 
 void Gpu::Submit(uint32_t* cmd_draw_buffer, uint32_t num_draw_dw, uint32_t* cmd_const_buffer,
                  uint32_t num_const_dw, bool trigger_agc_interrupt_on_done) {
-	GpuMutexLock lock(m_mutex);
+	OwnedCmdBuffer draw_buffer(cmd_draw_buffer, num_draw_dw);
+	OwnedCmdBuffer const_buffer(cmd_const_buffer, num_const_dw);
+	GpuMutexLock   lock(m_mutex);
 
-	m_gfx_ring->Submit(cmd_draw_buffer, num_draw_dw, cmd_const_buffer, num_const_dw, 0, 0, 0, 0,
+	m_gfx_ring->Submit(std::move(draw_buffer), std::move(const_buffer), 0, 0, 0, 0,
 	                   trigger_agc_interrupt_on_done);
 }
 
 void Gpu::SubmitCompute(uint32_t queue, uint32_t* cmd_buffer, uint32_t num_dw,
                         bool trigger_agc_interrupt_on_done) {
-	GpuMutexLock lock(m_mutex);
+	OwnedCmdBuffer buffer(cmd_buffer, num_dw);
+	GpuMutexLock   lock(m_mutex);
 
 	constexpr uint32_t compute_queue_base = 0x20u;
 	constexpr uint32_t compute_queue_num  = 7u * 8u;
@@ -336,7 +288,7 @@ void Gpu::SubmitCompute(uint32_t queue, uint32_t* cmd_buffer, uint32_t num_dw,
 
 	auto* ring = GetRing(ring_id);
 
-	ring->Submit(cmd_buffer, num_dw, trigger_agc_interrupt_on_done);
+	ring->Submit(std::move(buffer), trigger_agc_interrupt_on_done);
 }
 
 void Gpu::SubmitFlipPreparation() {
@@ -454,12 +406,51 @@ ComputeRing* Gpu::GetRing(uint32_t ring_id) {
 	return m_compute_ring[v];
 }
 
+void CommandProcessor::SetQueue(int queue) {
+	Common::LockGuard lock(m_mutex);
+	if (queue < 0 || queue >= GraphicContext::QUEUES_NUM ||
+	    (m_processors[queue] != nullptr && m_processors[queue] != this)) {
+		EXIT("invalid command-processor queue registration: queue=%d owner=%p\n", queue,
+		     static_cast<const void*>(m_processors[queue]));
+	}
+	m_scheduler.SetQueue(queue);
+	m_processors[queue] = this;
+}
+
+void CommandProcessor::FinishReadbackTransaction() {
+	if (GraphicsRunCurrentCommandProcessor() == nullptr || !m_readback_active) {
+		EXIT("GPU readback finish requires a command-processor thread\n");
+	}
+	if (m_readback_finished) {
+		return;
+	}
+	FinishCommandProcessors();
+	m_readback_finished = true;
+}
+
+void CommandProcessor::FinishCommandProcessors() {
+	std::array<CommandProcessor*, GraphicContext::QUEUES_NUM> processors {};
+	uint32_t                                                  processor_count = 0;
+	for (auto* processor: m_processors) {
+		if (processor == nullptr ||
+		    std::find(processors.begin(), processors.begin() + processor_count, processor) !=
+		        processors.begin() + processor_count) {
+			continue;
+		}
+		processors[processor_count++] = processor;
+		processor->m_scheduler.SubmitForReadback();
+	}
+	for (uint32_t i = 0; i < processor_count; i++) {
+		processors[i]->m_scheduler.ResumeAfterReadback();
+	}
+}
+
 void CommandProcessor::Reset() {
 	BufferWait();
 
 	Common::LockGuard lock(m_mutex);
 
-	GraphicsRenderDeleteBuffers();
+	Sync::DeleteBuffers();
 
 	m_sh_ctx.Reset();
 	m_ucfg.Reset();
@@ -598,13 +589,6 @@ bool TestWaitRegMemValue(uint64_t value, uint64_t ref, uint64_t mask, uint32_t f
 	return false;
 }
 
-template <typename T>
-static T LoadGuestWaitValue(const T* addr) {
-	CommandProcessorGuestAccessScope guest_access(CommandProcessorGuestAccess::WaitPoll,
-	                                              reinterpret_cast<uint64_t>(addr), sizeof(*addr));
-	return *addr;
-}
-
 static void YieldCommandProcessorWait(uint32_t poll_interval_cycles) noexcept {
 	// PS5 specifies GPU poll cycles, not host microseconds. Yield at the scheduler boundary now;
 	// a future resumable guest GPU scheduler can replace this one function without touching polling
@@ -625,12 +609,9 @@ void CommandProcessor::WaitRegMem(uint32_t func, const T* addr, T ref, T mask, u
 	const auto log_width  = static_cast<int>(sizeof(T) * 2u);
 	const auto bits       = static_cast<unsigned>(sizeof(T) * 8u);
 
-	if (!TestWaitRegMemValue(LoadGuestWaitValue(addr), ref, mask, func)) {
-		SynchronizeGpuRange(addr_value, sizeof(*addr));
-	}
 	uint64_t spin_count = 0;
 	for (;;) {
-		const auto value = LoadGuestWaitValue(addr);
+		const auto value = *addr;
 		if (TestWaitRegMemValue(value, ref, mask, func)) {
 			break;
 		}
@@ -659,15 +640,18 @@ void CommandProcessor::WriteData(uint32_t* dst, const uint32_t* src, uint32_t dw
 	const uint32_t write_confirm = (write_control >> 20u) & 0x1u;
 
 	if (dst_sel != 0 && dst_sel != 2 && dst_sel != 4 && dst_sel != 5) {
-		LOGF("\t warning: unexpected write_data dst_sel %" PRIu32 "\n", dst_sel);
+		EXIT("unsupported writeData destination selector 0x%02" PRIx32 "\n", dst_sel);
 	}
 	EXIT_NOT_IMPLEMENTED(increment != 0);
 
 	if (cache_policy > 3 || write_confirm > 1) {
 		LOGF("\t warning: unexpected write_data control 0x%08" PRIx32 "\n", write_control);
 	}
+	if (dw_num == 0) {
+		return;
+	}
 
-	memcpy(dst, src, static_cast<size_t>(dw_num) * 4);
+	memcpy(dst, src, static_cast<size_t>(dw_num) * sizeof(uint32_t));
 }
 
 void CommandProcessor::WriteReferenceClock(uint64_t dst_address, uint32_t num_bytes) {
@@ -677,12 +661,9 @@ void CommandProcessor::WriteReferenceClock(uint64_t dst_address, uint32_t num_by
 		EXIT("invalid reference-clock copy, dst=0x%016" PRIx64 " size=%u\n", dst_address,
 		     num_bytes);
 	}
-	const auto value = GraphicsRenderReadReferenceClock();
-	CommandProcessorGuestAccessScope guest_access(CommandProcessorGuestAccess::DirectFence,
-	                                                dst_address, num_bytes);
+	const auto value = Sync::ReadReferenceClock();
 	std::memcpy(reinterpret_cast<void*>(dst_address), &value, num_bytes);
-	LOGF("\t copy_data reference clock: dst=0x%016" PRIx64 " value=0x%016" PRIx64
-	     " size=%u\n",
+	LOGF("\t copy_data reference clock: dst=0x%016" PRIx64 " value=0x%016" PRIx64 " size=%u\n",
 	     dst_address, value, num_bytes);
 }
 
@@ -723,9 +704,9 @@ void CommandProcessor::DmaData(uint8_t engine, uint8_t dst_sel, uint8_t dst_cach
 	EXIT("unsupported dmaData source selector 0x%02" PRIx8 "\n", src_sel);
 }
 
-void GraphicsRing::Submit(uint32_t* cmd_draw_buffer, uint32_t num_draw_dw,
-                          uint32_t* cmd_const_buffer, uint32_t num_const_dw, int handle, int index,
-                          int flip_mode, int64_t flip_arg, bool trigger_agc_interrupt_on_done) {
+void GraphicsRing::Submit(OwnedCmdBuffer draw_buffer, OwnedCmdBuffer const_buffer, int handle,
+                          int index, int flip_mode, int64_t flip_arg,
+                          bool trigger_agc_interrupt_on_done) {
 	EXIT_IF(m_cp == nullptr);
 
 	Common::LockGuard lock(m_mutex);
@@ -742,9 +723,9 @@ void GraphicsRing::Submit(uint32_t* cmd_draw_buffer, uint32_t num_draw_dw,
 		m_cp->Reset();
 	}
 
-	auto& buf = m_cmd_batches.emplace_back();
-	buf.draw_buffer.Assign(cmd_draw_buffer, num_draw_dw);
-	buf.const_buffer.Assign(cmd_const_buffer, num_const_dw);
+	auto& buf                         = m_cmd_batches.emplace_back();
+	buf.draw_buffer                   = std::move(draw_buffer);
+	buf.const_buffer                  = std::move(const_buffer);
 	buf.flip.handle                   = handle;
 	buf.flip.index                    = index;
 	buf.flip.flip_mode                = flip_mode;
@@ -846,7 +827,7 @@ void GraphicsRing::ThreadBatchRun(void* data) {
 				ring->m_constant_job.Wait();
 				cp->BufferFlush();
 				if (buf.trigger_agc_interrupt_on_done) {
-					GraphicsRenderTriggerEopEvent(0);
+					Sync::TriggerEopEvent(0);
 				}
 			}
 		}
@@ -927,7 +908,7 @@ void ComputeRing::ThreadRun(void* data) {
 
 			cp->BufferFlush();
 			if (trigger_agc_interrupt_on_done) {
-				GraphicsRenderTriggerAgcUserInterrupt();
+				Sync::TriggerAgcUserInterrupt();
 			}
 		}
 		cp->RunUnlock();
@@ -936,12 +917,11 @@ void ComputeRing::ThreadRun(void* data) {
 	}
 }
 
-void ComputeRing::Submit(uint32_t* cmd_buffer, uint32_t num_dw,
-                         bool trigger_agc_interrupt_on_done) {
+void ComputeRing::Submit(OwnedCmdBuffer buffer, bool trigger_agc_interrupt_on_done) {
 	Common::LockGuard lock(m_mutex);
 
-	EXIT_IF(cmd_buffer == nullptr);
-	EXIT_IF(num_dw == 0);
+	EXIT_IF(buffer.data == nullptr);
+	EXIT_IF(buffer.num_dw == 0);
 
 	WindowWaitForGraphicInitialized();
 	GraphicsRenderCreateContext();
@@ -951,7 +931,7 @@ void ComputeRing::Submit(uint32_t* cmd_buffer, uint32_t num_dw,
 	}
 
 	DirectBatch batch {};
-	batch.buffer.Assign(cmd_buffer, num_dw);
+	batch.buffer                        = std::move(buffer);
 	batch.trigger_agc_interrupt_on_done = trigger_agc_interrupt_on_done;
 	m_direct_batches.push_back(std::move(batch));
 
@@ -1223,35 +1203,38 @@ void CommandProcessor::DrawIndirect(uint32_t data_offset, uint32_t draw_initiato
 	EXIT_NOT_IMPLEMENTED((draw_initiator & ~0x20u) != 2u);
 	EXIT_NOT_IMPLEMENTED(m_draw_indirect_args_base_addr == 0);
 
-	const auto args_addr = m_draw_indirect_args_base_addr + data_offset;
+	const auto* args_addr =
+	    reinterpret_cast<const void*>(m_draw_indirect_args_base_addr + data_offset);
 
 	if (!indexed) {
-		auto* args = reinterpret_cast<const DrawIndirectArgs*>(args_addr);
-		if (args->instance_count != 1u || args->start_vertex_location != 0u ||
-		    args->start_instance_location != 0u) {
+		DrawIndirectArgs args {};
+		std::memcpy(&args, args_addr, sizeof(args));
+		if (args.instance_count != 1u || args.start_vertex_location != 0u ||
+		    args.start_instance_location != 0u) {
 			static std::atomic<uint32_t> log_count {0};
 			if (log_count.fetch_add(1) < 64) {
 				LOGF("\t warning: partial DrawIndirect args: vertex_count=%" PRIu32
 				     ", instance_count=%" PRIu32 ", start_vertex=%" PRIu32
 				     ", start_instance=%" PRIu32 "\n",
-				     args->vertex_count_per_instance, args->instance_count,
-				     args->start_vertex_location, args->start_instance_location);
+				     args.vertex_count_per_instance, args.instance_count,
+				     args.start_vertex_location, args.start_instance_location);
 			}
 		}
-		DrawIndexAuto(args->vertex_count_per_instance, 0, 0, args->instance_count,
-		              args->start_vertex_location, args->start_instance_location);
+		DrawIndexAuto(args.vertex_count_per_instance, 0, 0, args.instance_count,
+		              args.start_vertex_location, args.start_instance_location);
 		return;
 	}
 
-	auto* args = reinterpret_cast<const DrawIndexedIndirectArgs*>(args_addr);
-	if (args->base_vertex_location != 0u || args->start_instance_location != 0u) {
+	DrawIndexedIndirectArgs args {};
+	std::memcpy(&args, args_addr, sizeof(args));
+	if (args.base_vertex_location != 0u || args.start_instance_location != 0u) {
 		static std::atomic<uint32_t> log_count {0};
 		if (log_count.fetch_add(1) < 64) {
 			LOGF("\t warning: partial DrawIndexIndirect args: index_count=%" PRIu32
 			     ", instance_count=%" PRIu32 ", start_index=%" PRIu32 ", base_vertex=%" PRIu32
 			     ", start_instance=%" PRIu32 "\n",
-			     args->index_count_per_instance, args->instance_count, args->start_index_location,
-			     args->base_vertex_location, args->start_instance_location);
+			     args.index_count_per_instance, args.instance_count, args.start_index_location,
+			     args.base_vertex_location, args.start_instance_location);
 		}
 	}
 
@@ -1264,22 +1247,22 @@ void CommandProcessor::DrawIndirect(uint32_t data_offset, uint32_t draw_initiato
 	}
 
 	auto* index_addr = reinterpret_cast<const void*>(
-	    m_index_base_addr + static_cast<uint64_t>(args->start_index_location) * index_size);
+	    m_index_base_addr + static_cast<uint64_t>(args.start_index_location) * index_size);
 
 	const uint32_t index_count =
-	    (m_index_buffer_size != 0 ? std::min(args->index_count_per_instance, m_index_buffer_size)
-	                              : args->index_count_per_instance);
-	if (GraphicsRunDebugDumpEnabled() && index_count != args->index_count_per_instance) {
+	    (m_index_buffer_size != 0 ? std::min(args.index_count_per_instance, m_index_buffer_size)
+	                              : args.index_count_per_instance);
+	if (GraphicsRunDebugDumpEnabled() && index_count != args.index_count_per_instance) {
 		static std::atomic<uint32_t> log_count {0};
 		if (log_count.fetch_add(1, std::memory_order_relaxed) < 64) {
 			LOGF("\t DrawIndexIndirect: clamped index_count from %" PRIu32 " to %" PRIu32
 			     " using INDEX_BUFFER_SIZE\n",
-			     args->index_count_per_instance, index_count);
+			     args.index_count_per_instance, index_count);
 		}
 	}
 
-	DrawIndex(index_count, index_addr, 0, 1, args->instance_count, nullptr, 0,
-	          static_cast<int32_t>(args->base_vertex_location), args->start_instance_location);
+	DrawIndex(index_count, index_addr, 0, 1, args.instance_count, nullptr, 0,
+	          static_cast<int32_t>(args.base_vertex_location), args.start_instance_location);
 }
 
 void CommandProcessor::DrawIndirectMulti(uint32_t data_offset, uint32_t max_count_or_count,
@@ -1497,18 +1480,6 @@ void CommandProcessor::DrawIndexAuto(uint32_t index_count, uint32_t flags,
 	                    first_instance);
 }
 
-void CommandProcessor::ClearGds(uint64_t dw_offset, uint32_t dw_num, uint32_t clear_value) {
-	Common::LockGuard lock(m_mutex);
-
-	GraphicsRenderClearGds(dw_offset, dw_num, clear_value);
-}
-
-void CommandProcessor::ReadGds(uint32_t* dst, uint32_t dw_offset, uint32_t dw_size) {
-	Common::LockGuard lock(m_mutex);
-
-	GraphicsRenderReadGds(dst, dw_offset, dw_size);
-}
-
 void CommandProcessor::WaitFlipDone(uint32_t video_out_handle, uint32_t display_buffer_index) {
 	BufferFlush();
 
@@ -1555,32 +1526,28 @@ void CommandProcessor::WriteAtEndOfPipe(uint32_t cache_policy, uint32_t event_wr
 	switch (interrupt_selector) {
 		case 0x00:
 		case 0x03: with_interrupt = false; break;
-		case 0x01:
-			GraphicsRenderTriggerEopEventAtEndOfPipe(CurrentBuffer(), interrupt_context_id);
-			return;
+		case 0x01: Sync::TriggerEopEventAtEndOfPipe(CurrentBuffer(), interrupt_context_id); return;
 		case 0x02: with_interrupt = true; break;
 		default: EXIT("unknown interrupt_selector\n");
 	}
 
 	auto write32 = [&](bool with_writeback) {
-		auto*                            dst  = static_cast<uint32_t*>(dst_gpu_addr);
-		auto                             data = static_cast<uint32_t>(value);
-		CommandProcessorGuestAccessScope guest_access(CommandProcessorGuestAccess::DirectFence,
-		                                              reinterpret_cast<uint64_t>(dst),
-		                                              sizeof(*dst));
+		auto* dst  = static_cast<uint32_t*>(dst_gpu_addr);
+		auto  data = static_cast<uint32_t>(value);
+		std::memcpy(dst, &data, sizeof(data));
 
 		if (with_interrupt) {
 			if (with_writeback) {
-				GraphicsRenderWriteAtEndOfPipeWithInterruptWriteBack32(
-				    m_submit_id, CurrentBuffer(), dst, data, interrupt_context_id);
+				Sync::WriteAtEndOfPipeWithInterruptWriteBack32(m_submit_id, CurrentBuffer(), dst,
+				                                               data, interrupt_context_id);
 			} else {
-				GraphicsRenderWriteAtEndOfPipeWithInterrupt32(m_submit_id, CurrentBuffer(), dst,
-				                                              data, interrupt_context_id);
+				Sync::WriteAtEndOfPipeWithInterrupt32(m_submit_id, CurrentBuffer(), dst, data,
+				                                      interrupt_context_id);
 			}
 		} else if (with_writeback) {
-			GraphicsRenderWriteAtEndOfPipeWithWriteBack32(m_submit_id, CurrentBuffer(), dst, data);
+			Sync::WriteAtEndOfPipeWithWriteBack32(m_submit_id, CurrentBuffer(), dst, data);
 		} else {
-			GraphicsRenderWriteAtEndOfPipe32(m_submit_id, CurrentBuffer(), dst, data);
+			Sync::WriteAtEndOfPipe32(m_submit_id, CurrentBuffer(), dst, data);
 		}
 	};
 
@@ -1588,9 +1555,11 @@ void CommandProcessor::WriteAtEndOfPipe(uint32_t cache_policy, uint32_t event_wr
 		case 0x01:
 			if constexpr (sizeof(T) == sizeof(uint32_t)) {
 				if (eop_event_type == 0x2f && cache_action == 0x00 && event_index == 0x06) {
-					GraphicsRenderWriteAtEndOfPipeGds32(m_submit_id, CurrentBuffer(),
-					                                    static_cast<uint32_t*>(dst_gpu_addr),
-					                                    value & 0xffffu, value >> 16u);
+					auto* dst = static_cast<uint32_t*>(dst_gpu_addr);
+					SynchronizeGpu();
+					Sync::ReadGds(dst, value & 0xffffu, value >> 16u);
+					Sync::WriteAtEndOfPipeGds32(m_submit_id, CurrentBuffer(), dst, value & 0xffffu,
+					                            value >> 16u);
 					return;
 				}
 			} else if (eop_event_type == 0x04 && cache_action == 0x00 && event_index == 0x05) {
@@ -1609,24 +1578,22 @@ void CommandProcessor::WriteAtEndOfPipe(uint32_t cache_policy, uint32_t event_wr
 				}
 			} else {
 				auto write64 = [&](bool with_writeback) {
-					auto*                            dst = static_cast<uint64_t*>(dst_gpu_addr);
-					CommandProcessorGuestAccessScope guest_access(
-					    CommandProcessorGuestAccess::DirectFence, reinterpret_cast<uint64_t>(dst),
-					    sizeof(*dst));
+					auto* dst = static_cast<uint64_t*>(dst_gpu_addr);
+					std::memcpy(dst, &value, sizeof(value));
 
 					if (with_interrupt) {
 						if (with_writeback) {
-							GraphicsRenderWriteAtEndOfPipeWithInterruptWriteBack64(
+							Sync::WriteAtEndOfPipeWithInterruptWriteBack64(
 							    m_submit_id, CurrentBuffer(), dst, value, interrupt_context_id);
 						} else {
-							GraphicsRenderWriteAtEndOfPipeWithInterrupt64(
-							    m_submit_id, CurrentBuffer(), dst, value, interrupt_context_id);
+							Sync::WriteAtEndOfPipeWithInterrupt64(m_submit_id, CurrentBuffer(), dst,
+							                                      value, interrupt_context_id);
 						}
 					} else if (with_writeback) {
-						GraphicsRenderWriteAtEndOfPipeWithWriteBack64(m_submit_id, CurrentBuffer(),
-						                                              dst, value);
+						Sync::WriteAtEndOfPipeWithWriteBack64(m_submit_id, CurrentBuffer(), dst,
+						                                      value);
 					} else {
-						GraphicsRenderWriteAtEndOfPipe64(m_submit_id, CurrentBuffer(), dst, value);
+						Sync::WriteAtEndOfPipe64(m_submit_id, CurrentBuffer(), dst, value);
 					}
 				};
 
@@ -1693,16 +1660,16 @@ void CommandProcessor::WriteAtEndOfPipe(uint32_t cache_policy, uint32_t event_wr
 			break;
 		case 0x04:
 			if constexpr (sizeof(T) == sizeof(uint64_t)) {
-				CommandProcessorGuestAccessScope guest_access(
-				    CommandProcessorGuestAccess::DirectFence,
-				    reinterpret_cast<uint64_t>(dst_gpu_addr), sizeof(uint64_t));
+				const auto clock = Sync::ReadReferenceClock();
+				std::memcpy(dst_gpu_addr, &clock, sizeof(clock));
 				switch (cache_action) {
 					case 0x00:
 						if (((eop_event_type == 0x04 && event_index == 0x05) ||
 						     (eop_event_type == 0x28 && event_index == 0x00)) &&
 						    !with_interrupt) {
-							GraphicsRenderWriteAtEndOfPipeClockCounter(
-							    m_submit_id, CurrentBuffer(), static_cast<uint64_t*>(dst_gpu_addr));
+							Sync::WriteAtEndOfPipeClockCounter(m_submit_id, CurrentBuffer(),
+							                                   static_cast<uint64_t*>(dst_gpu_addr),
+							                                   clock);
 							return;
 						}
 						break;
@@ -1711,8 +1678,9 @@ void CommandProcessor::WriteAtEndOfPipe(uint32_t cache_policy, uint32_t event_wr
 						      (event_index == 0x00 || event_index == 0x05)) ||
 						     (eop_event_type == 0x28 && event_index == 0x00)) &&
 						    !with_interrupt) {
-							GraphicsRenderWriteAtEndOfPipeClockCounterWithWriteBack(
-							    m_submit_id, CurrentBuffer(), static_cast<uint64_t*>(dst_gpu_addr));
+							Sync::WriteAtEndOfPipeClockCounterWithWriteBack(
+							    m_submit_id, CurrentBuffer(), static_cast<uint64_t*>(dst_gpu_addr),
+							    clock);
 							return;
 						}
 						break;
@@ -1761,7 +1729,7 @@ void CommandProcessor::TriggerEopEventAtEndOfPipe(uint32_t interrupt_context_id)
 
 	CheckBuffer();
 
-	GraphicsRenderTriggerEopEventAtEndOfPipe(CurrentBuffer(), interrupt_context_id);
+	Sync::TriggerEopEventAtEndOfPipe(CurrentBuffer(), interrupt_context_id);
 }
 
 void CommandProcessor::RenderTextureBarrier(uint64_t vaddr, uint64_t size) {
@@ -1844,10 +1812,10 @@ void CommandProcessor::Flip() {
 	}
 
 	auto* command = CurrentBuffer();
-	auto  request = GraphicsRenderPrepareDisplayBufferFlip(
-	     command, m_flip.handle, m_flip.index, m_flip.flip_mode, m_flip.flip_arg);
-	GraphicsRenderWriteAtEndOfPipeOnlyFlip(m_submit_id, command, m_flip.handle, m_flip.index,
-	                                       m_flip.flip_mode, m_flip.flip_arg, request);
+	auto  request = Sync::PrepareDisplayBufferFlip(command, m_flip.handle, m_flip.index,
+	                                               m_flip.flip_mode, m_flip.flip_arg);
+	Sync::WriteAtEndOfPipeOnlyFlip(m_submit_id, command, m_flip.handle, m_flip.index,
+	                               m_flip.flip_mode, m_flip.flip_arg, request);
 	m_scheduler.Flush();
 }
 
@@ -1863,15 +1831,13 @@ void CommandProcessor::Flip(void* dst_gpu_addr, uint32_t value) {
 		     reinterpret_cast<uint64_t>(dst_gpu_addr), value);
 	}
 
+	std::memcpy(dst_gpu_addr, &value, sizeof(value));
 	auto* command = CurrentBuffer();
-	auto  request = GraphicsRenderPrepareDisplayBufferFlip(
-	     command, m_flip.handle, m_flip.index, m_flip.flip_mode, m_flip.flip_arg);
-	CommandProcessorGuestAccessScope guest_access(CommandProcessorGuestAccess::DirectFence,
-	                                              reinterpret_cast<uint64_t>(dst_gpu_addr),
-	                                              sizeof(uint32_t));
-	GraphicsRenderWriteAtEndOfPipeWithFlip32(
-	    m_submit_id, command, static_cast<uint32_t*>(dst_gpu_addr), value, m_flip.handle,
-	    m_flip.index, m_flip.flip_mode, m_flip.flip_arg, request);
+	auto  request = Sync::PrepareDisplayBufferFlip(command, m_flip.handle, m_flip.index,
+	                                               m_flip.flip_mode, m_flip.flip_arg);
+	Sync::WriteAtEndOfPipeWithFlip32(m_submit_id, command, static_cast<uint32_t*>(dst_gpu_addr),
+	                                 value, m_flip.handle, m_flip.index, m_flip.flip_mode,
+	                                 m_flip.flip_arg, request);
 	m_scheduler.Flush();
 }
 
@@ -1893,13 +1859,11 @@ void CommandProcessor::FlipWithInterrupt(uint32_t eop_event_type, uint32_t cache
 	if (eop_event_type != 0x00000004 || cache_action != 0x00000038) {
 		EXIT("unknown event type\n");
 	}
+	std::memcpy(dst_gpu_addr, &value, sizeof(value));
 	auto* command = CurrentBuffer();
-	auto  request = GraphicsRenderPrepareDisplayBufferFlip(command, m_flip.handle, m_flip.index,
-	                                                       m_flip.flip_mode, m_flip.flip_arg);
-	CommandProcessorGuestAccessScope guest_access(CommandProcessorGuestAccess::DirectFence,
-	                                              reinterpret_cast<uint64_t>(dst_gpu_addr),
-	                                              sizeof(uint32_t));
-	GraphicsRenderWriteAtEndOfPipeWithInterruptWriteBackFlip32(
+	auto  request = Sync::PrepareDisplayBufferFlip(command, m_flip.handle, m_flip.index,
+	                                               m_flip.flip_mode, m_flip.flip_arg);
+	Sync::WriteAtEndOfPipeWithInterruptWriteBackFlip32(
 	    m_submit_id, command, static_cast<uint32_t*>(dst_gpu_addr), value, m_flip.handle,
 	    m_flip.index, m_flip.flip_mode, m_flip.flip_arg, request);
 	m_scheduler.Flush();
@@ -1923,15 +1887,8 @@ void CommandProcessor::PrepareCpuFlip() {
 }
 
 void CommandProcessor::SynchronizeGpu() {
-	BufferFlush();
-	BufferWait();
-}
-
-void CommandProcessor::SynchronizeGpuRange(uint64_t vaddr, uint64_t size) {
-	if (vaddr == 0 || size == 0 || size > UINT64_MAX - vaddr) {
-		EXIT("invalid GPU synchronization range\n");
-	}
-	SynchronizeGpu();
+	Common::LockGuard lock(m_mutex);
+	FinishCommandProcessors();
 }
 
 void GraphicsRunSubmit(uint32_t* cmd_draw_buffer, uint32_t num_draw_dw, uint32_t* cmd_const_buffer,
@@ -1996,14 +1953,15 @@ bool GraphicsRunIsCommandProcessorThread() noexcept {
 	return g_current_run_cp != nullptr;
 }
 
-bool GraphicsRunIsGuestMemoryPoll() noexcept {
-	return g_current_run_cp != nullptr &&
-	       g_guest_memory_access == CommandProcessorGuestAccess::WaitPoll;
+CommandProcessor* GraphicsRunCurrentCommandProcessor() noexcept {
+	return g_current_run_cp;
 }
 
-bool GraphicsRunIsCommandProcessorGuestAccess() noexcept {
-	return g_current_run_cp != nullptr &&
-	       g_guest_memory_access != CommandProcessorGuestAccess::None;
+void GraphicsRunFinishCommandProcessors() {
+	if (g_current_run_cp == nullptr) {
+		EXIT("GPU readback finish requires a command-processor thread\n");
+	}
+	g_current_run_cp->FinishReadbackTransaction();
 }
 
 bool GraphicsRunSubmissionLockHeld() noexcept {
@@ -2012,37 +1970,6 @@ bool GraphicsRunSubmissionLockHeld() noexcept {
 
 bool GraphicsRunGpuLockHeld() noexcept {
 	return g_gpu_mutex_owned;
-}
-
-int GraphicsRunBeginCommandProcessorReadback() {
-	if (g_current_run_cp == nullptr || g_submission_pause_depth != 0 || g_gpu_mutex_owned ||
-	    g_cp_readback_owned || g_guest_memory_access == CommandProcessorGuestAccess::None) {
-		EXIT("GPU command-thread readback requires an unpaused command processor\n");
-	}
-	const auto queue = g_current_run_cp->GetQueue();
-	if (queue < 0 || queue >= GraphicContext::QUEUES_NUM) {
-		EXIT("GPU command-thread readback has invalid queue %d\n", queue);
-	}
-	g_cp_readback_owned = true;
-	// Direct fences enter from an already serialized command handler. Wait polls acquire the
-	// same processor mutex in CommandProcessorGuestAccessScope before the resource transaction.
-	g_cp_readback_preowned = true;
-	const auto synchronized_queue =
-	    g_current_run_cp->BeginReadbackTransaction(g_cp_readback_preowned);
-	if (synchronized_queue != queue) {
-		EXIT("GPU command-thread queue changed during readback\n");
-	}
-	return synchronized_queue;
-}
-
-void GraphicsRunEndCommandProcessorReadback() {
-	if (g_current_run_cp == nullptr || !g_cp_readback_owned) {
-		EXIT("GPU command-thread readback ended without ownership\n");
-	}
-	const auto preowned    = g_cp_readback_preowned;
-	g_cp_readback_owned    = false;
-	g_cp_readback_preowned = false;
-	g_current_run_cp->EndReadbackTransaction(preowned);
 }
 
 } // namespace Libs::Graphics

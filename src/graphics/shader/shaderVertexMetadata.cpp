@@ -1,7 +1,5 @@
 #include "graphics/shader/shaderVertexMetadata.h"
 
-#include "graphics/host_gpu/hostMemory.h"
-
 #include <array>
 #include <cstring>
 
@@ -16,10 +14,6 @@ bool Fail(std::string* error, const char* message) {
 	return false;
 }
 
-bool Readable(const void* data, uint64_t size) {
-	return data != nullptr && HostMemoryRangeIsReadable(reinterpret_cast<uint64_t>(data), size);
-}
-
 } // namespace
 
 bool ShaderReadVertexMetadata(const ShaderMappedData& data, uint32_t max_user_sgprs,
@@ -27,8 +21,8 @@ bool ShaderReadVertexMetadata(const ShaderMappedData& data, uint32_t max_user_sg
 	if (metadata == nullptr) {
 		return Fail(error, "missing vertex metadata output");
 	}
-	if (!Readable(data.user_data, sizeof(ShaderUserData))) {
-		return Fail(error, "unreadable AGC user-data header");
+	if (data.user_data == nullptr) {
+		return Fail(error, "missing AGC user-data header");
 	}
 
 	ShaderUserData user_data {};
@@ -44,8 +38,8 @@ bool ShaderReadVertexMetadata(const ShaderMappedData& data, uint32_t max_user_sg
 	const auto                                direct_size =
 	    static_cast<uint64_t>(user_data.direct_resource_count) * sizeof(uint16_t);
 	if (direct_size != 0) {
-		if (!Readable(user_data.direct_resource_offset, direct_size)) {
-			return Fail(error, "unreadable AGC direct-resource offsets");
+		if (user_data.direct_resource_offset == nullptr) {
+			return Fail(error, "missing AGC direct-resource offsets");
 		}
 		std::memcpy(direct_offsets.data(), user_data.direct_resource_offset, direct_size);
 	}
@@ -84,8 +78,8 @@ bool ShaderReadVertexMetadata(const ShaderMappedData& data, uint32_t max_user_sg
 
 	const auto semantic_size =
 	    static_cast<uint64_t>(data.num_input_semantics) * sizeof(ShaderSemantic);
-	if (!Readable(data.input_semantics, semantic_size)) {
-		return Fail(error, "unreadable vertex input semantics");
+	if (data.input_semantics == nullptr) {
+		return Fail(error, "missing vertex input semantics");
 	}
 	std::memcpy(next.input_semantics.data(), data.input_semantics, semantic_size);
 	next.input_semantics_count = data.num_input_semantics;

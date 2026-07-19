@@ -1,6 +1,7 @@
 #include "graphics/host_gpu/renderer/gpuResourceManager.h"
 
 #include "common/assert.h"
+#include "graphics/guest_gpu/command_processor/commandProcessor.h"
 #include "graphics/guest_gpu/graphicsRun.h"
 #include "graphics/host_gpu/objects/label.h"
 #include "graphics/host_gpu/renderer/render.h"
@@ -37,17 +38,24 @@ bool GpuResourceManager::HandleFault(PageFaultAccess access, uint64_t fault_vadd
 		     "addr=0x%016" PRIx64 " access=%u\n",
 		     fault_vaddr, static_cast<uint32_t>(access));
 	}
-	if (m_resource_mutex.IsOwnedByCurrentThread()) {
-		if (!GraphicsRunIsCommandProcessorGuestAccess()) {
-			EXIT("unsupported page fault from a pre-owned resource transaction, addr=0x%016" PRIx64
-			     " access=%u\n",
-			     fault_vaddr, static_cast<uint32_t>(access));
+	if (auto* cp = GraphicsRunCurrentCommandProcessor(); cp != nullptr) {
+		cp->BeginReadbackTransaction();
+		bool handled = false;
+		{
+			ResourceMutex::FaultScope fault(m_resource_mutex);
+			handled = m_page_manager.HandleFault(access, fault_vaddr);
 		}
-		ResourceMutex::FaultScope fault(m_resource_mutex);
-		return m_page_manager.HandleFault(access, fault_vaddr);
+		cp->EndReadbackTransaction();
+		return handled;
+	}
+	if (m_resource_mutex.IsOwnedByCurrentThread()) {
+		EXIT("unsupported page fault from a pre-owned resource transaction, addr=0x%016" PRIx64
+		     " access=%u\n",
+		     fault_vaddr, static_cast<uint32_t>(access));
 	}
 	// Stop command-processor jobs before taking the shared cache transaction. External readback
-	// workers inherit this paused state and therefore never form resource -> submission lock inversion.
+	// workers inherit this paused state and therefore never form resource -> submission lock
+	// inversion.
 	GraphicsRunSubmissionLock submissions;
 	ResourceMutex::FaultScope fault(m_resource_mutex);
 	return m_page_manager.HandleFault(access, fault_vaddr);
@@ -55,35 +63,6 @@ bool GpuResourceManager::HandleFault(PageFaultAccess access, uint64_t fault_vadd
 
 bool GpuResourceManager::IsMapped(uint64_t vaddr, uint64_t size) const noexcept {
 	return m_page_manager.IsMapped(vaddr, size);
-}
-
-std::unique_lock<ResourceMutex> GpuResourceManager::LockCommandProcessorGuestAccess(
-    uint64_t vaddr, uint64_t size) {
-	if (vaddr == 0 || size == 0 || vaddr >= TRACKER_ADDRESS_SIZE ||
-	    size > TRACKER_ADDRESS_SIZE - vaddr) {
-		EXIT("invalid command-processor guest-memory access, addr=0x%016" PRIx64
-		     " size=0x%016" PRIx64 "\n",
-		     vaddr, size);
-	}
-	return std::unique_lock(m_resource_mutex);
-}
-
-std::unique_lock<ResourceMutex> GpuResourceManager::LockAsynchronousGuestWrite(uint64_t vaddr,
-                                                                                uint64_t size) {
-	if (vaddr == 0 || size == 0 || vaddr >= TRACKER_ADDRESS_SIZE ||
-	    size > TRACKER_ADDRESS_SIZE - vaddr) {
-		EXIT("invalid asynchronous guest-memory write, addr=0x%016" PRIx64
-		     " size=0x%016" PRIx64 "\n",
-		     vaddr, size);
-	}
-	std::unique_lock transaction(m_resource_mutex);
-	if (m_buffer_cache.HasPageOverlap(vaddr, size) || m_texture_cache.HasPageOverlap(vaddr, size) ||
-	    m_texture_cache.HasMetaOverlap(vaddr, size)) {
-		EXIT("asynchronous guest-memory write to a cached buffer/image range is unsupported, "
-		     "addr=0x%016" PRIx64 " size=0x%016" PRIx64 "\n",
-		     vaddr, size);
-	}
-	return transaction;
 }
 
 void GpuResourceManager::MapMemory(uint64_t vaddr, uint64_t size, GpuAccess access) {

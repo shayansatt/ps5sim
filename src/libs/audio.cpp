@@ -83,7 +83,7 @@ public:
 	bool     AudioOutClose(Id handle);
 	bool     AudioOutValid(Id handle);
 	bool     AudioOutSetVolume(Id handle, uint32_t bitflag, const int* volume);
-	uint32_t AudioOutOutputs(OutputParam* params, uint32_t num);
+	uint32_t AudioOutOutputs(OutputParam* params, uint32_t num, bool blocking = true);
 	bool     AudioOutGetStatus(Id handle, int* type, int* channels_num);
 
 	Id       AudioInOpen(uint32_t type, uint32_t samples_num, uint32_t freq, Format format);
@@ -130,7 +130,7 @@ private:
 	static void            CloseSdlDevice(PortOut* port);
 	static const void*     PrepareOutputBuffer(const PortOut& port, const void* data,
 	                                           std::vector<uint8_t>* buffer);
-	static bool            QueueSdlAudio(PortOut* port, const void* data);
+	static bool            QueueSdlAudio(PortOut* port, const void* data, bool blocking);
 };
 
 static Audio* g_audio = nullptr;
@@ -152,7 +152,7 @@ void AudioOutClose(int handle) {
 	}
 }
 
-uint32_t AudioOutOutputs(const OutputParam* params, uint32_t num) {
+uint32_t AudioOutOutputs(const OutputParam* params, uint32_t num, bool blocking) {
 	if (g_audio == nullptr || params == nullptr || num == 0) {
 		return 0;
 	}
@@ -171,7 +171,7 @@ uint32_t AudioOutOutputs(const OutputParam* params, uint32_t num) {
 	}
 
 	return g_audio->AudioOutOutputs(output_params.data(),
-	                                static_cast<uint32_t>(output_params.size()));
+	                                static_cast<uint32_t>(output_params.size()), blocking);
 }
 
 } // namespace AudioInternal
@@ -321,7 +321,7 @@ const void* Audio::PrepareOutputBuffer(const PortOut& port, const void* data,
 	return buffer->data();
 }
 
-bool Audio::QueueSdlAudio(PortOut* port, const void* data) {
+bool Audio::QueueSdlAudio(PortOut* port, const void* data, bool blocking) {
 	EXIT_IF(port == nullptr);
 
 	if (port->audio_device == 0 || data == nullptr) {
@@ -363,14 +363,16 @@ bool Audio::QueueSdlAudio(PortOut* port, const void* data) {
 		queue_size = static_cast<uint32_t>(cvt.len_cvt);
 	}
 
-	const auto min_queued_size = queue_size * 2u;
-	const auto wait_start      = LibKernel::KernelGetProcessTime();
-	while (SDL_GetQueuedAudioSize(port->audio_device) > min_queued_size) {
-		if (LibKernel::KernelGetProcessTime() - wait_start > 200000) {
-			SDL_ClearQueuedAudio(port->audio_device);
-			break;
+	if (blocking) {
+		const auto min_queued_size = queue_size * 2u;
+		const auto wait_start      = LibKernel::KernelGetProcessTime();
+		while (SDL_GetQueuedAudioSize(port->audio_device) > min_queued_size) {
+			if (LibKernel::KernelGetProcessTime() - wait_start > 200000) {
+				SDL_ClearQueuedAudio(port->audio_device);
+				break;
+			}
+			Common::Thread::SleepMicro(1000);
 		}
-		Common::Thread::SleepMicro(1000);
 	}
 
 	if (SDL_QueueAudio(port->audio_device, queue_data, queue_size) < 0) {
@@ -492,7 +494,7 @@ bool Audio::AudioOutSetVolume(Id handle, uint32_t bitflag, const int* volume) {
 	return false;
 }
 
-uint32_t Audio::AudioOutOutputs(OutputParam* params, uint32_t num) {
+uint32_t Audio::AudioOutOutputs(OutputParam* params, uint32_t num, bool blocking) {
 	EXIT_NOT_IMPLEMENTED(num == 0);
 	EXIT_NOT_IMPLEMENTED(!AudioOutValid(params[0].handle));
 
@@ -509,14 +511,14 @@ uint32_t Audio::AudioOutOutputs(OutputParam* params, uint32_t num) {
 		max_wait_time      = (wait_time > max_wait_time ? wait_time : max_wait_time);
 	}
 
-	if (max_wait_time != 0) {
+	if (blocking && max_wait_time != 0) {
 		Common::Thread::SleepMicro(max_wait_time);
 	}
 
 	for (uint32_t i = 0; i < num; i++) {
 		auto& port = m_out_ports[params[i].handle.GetId()];
 
-		QueueSdlAudio(&port, params[i].data);
+		QueueSdlAudio(&port, params[i].data, blocking);
 	}
 
 	for (uint32_t i = 0; i < num; i++) {

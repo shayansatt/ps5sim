@@ -2233,7 +2233,7 @@ PS5SIM_CP_OP_PARSER(CpOpCopyData) {
 		cp->WriteReferenceClock(dst, num_bytes);
 		return 5;
 	}
-	const auto     dma_src       = CopyDataSrcToDma(src_sel);
+	const auto dma_src = CopyDataSrcToDma(src_sel);
 	if (dma_src == 2 && num_bytes == 8) {
 		EXIT("unsupported 64-bit immediate copyData\n");
 	}
@@ -2636,7 +2636,6 @@ PS5SIM_CP_OP_PARSER(CpOpIndirectCxRegs) {
 	if (indirect_buffer == nullptr) {
 		EXIT("indirect CX registers have null address, num_regs = %" PRIu32 "\n", indirect_num_dw);
 	}
-
 	for (uint32_t i = 0; i < indirect_num_dw; i++, indirect_buffer += 2) {
 		auto cmd_offset = indirect_buffer[0];
 		auto value      = indirect_buffer[1];
@@ -2695,13 +2694,14 @@ PS5SIM_CP_OP_PARSER(CpOpIndirectShRegs) {
 	if (indirect_buffer == nullptr) {
 		EXIT("indirect SH registers have null address, num_regs = %" PRIu32 "\n", indirect_num_dw);
 	}
+	const auto indirect_address = reinterpret_cast<uint64_t>(indirect_buffer);
 
 	for (uint32_t i = 0; i < indirect_num_dw; i++, indirect_buffer += 2) {
 		auto raw_cmd_offset = indirect_buffer[0];
 		auto cmd_offset     = NormalizeRegisterOffset(raw_cmd_offset);
 		auto value          = indirect_buffer[1];
 
-		//Not sure if this is correct
+		// Not sure if this is correct
 		if (raw_cmd_offset != cmd_offset) {
 			LOGF_COLOR(Log::Color::Red,
 			           "\t temporary: normalized indirect SH register offset 0x%08" PRIx32
@@ -2709,7 +2709,7 @@ PS5SIM_CP_OP_PARSER(CpOpIndirectShRegs) {
 			           raw_cmd_offset, cmd_offset);
 		}
 
-		//Not sure if this is correct
+		// Not sure if this is correct
 		if (cmd_offset == Pm4::SH_NOP || raw_cmd_offset == 0xffffffffu) {
 			continue;
 		}
@@ -2725,8 +2725,7 @@ PS5SIM_CP_OP_PARSER(CpOpIndirectShRegs) {
 		if (pfunc == nullptr) {
 			LOGF("unknown indirect SH register: index=%" PRIu32 "/%" PRIu32 ", regs=0x%016" PRIx64
 			     ", offset=0x%08" PRIx32 ", value=0x%08" PRIx32 "\n",
-			     i, indirect_num_dw, reinterpret_cast<uint64_t>(indirect_buffer - i * 2),
-			     cmd_offset, value);
+			     i, indirect_num_dw, indirect_address, cmd_offset, value);
 			auto* dump_regs = indirect_buffer - i * 2;
 			for (uint32_t j = 0; j < indirect_num_dw && j < 16; j++) {
 				LOGF("\t sh_indirect[%" PRIu32 "] offset=0x%08" PRIx32 ", value=0x%08" PRIx32 "\n",
@@ -2758,13 +2757,12 @@ PS5SIM_CP_OP_PARSER(CpOpIndirectUcRegs) {
 	if (indirect_buffer == nullptr) {
 		EXIT("indirect UC registers have null address, num_regs = %" PRIu32 "\n", indirect_num_dw);
 	}
-
 	for (uint32_t i = 0; i < indirect_num_dw; i++, indirect_buffer += 2) {
 		auto raw_cmd_offset = indirect_buffer[0];
 		auto cmd_offset     = NormalizeRegisterOffset(raw_cmd_offset);
 		auto value          = indirect_buffer[1];
 
-		//Not sure if this is correct
+		// Not sure if this is correct
 		if (raw_cmd_offset != cmd_offset) {
 			LOGF_COLOR(Log::Color::Red,
 			           "\t temporary: normalized indirect UC register offset 0x%08" PRIx32
@@ -4140,7 +4138,7 @@ void GraphicsInitJmpTablesCxIndirect() {
 		HW::DepthDepthSizeXY r;
 		r.x_max = PS5SIM_PM4_GET(value, DB_DEPTH_SIZE_XY, X_MAX);
 		r.y_max = PS5SIM_PM4_GET(value, DB_DEPTH_SIZE_XY, Y_MAX);
-		r.valid = (r.x_max != 0 || r.y_max != 0);
+		r.valid = true;
 		cp->GetCtx()->SetDepthDepthSizeXY(r);
 	};
 	g_hw_ctx_indirect_func[Pm4::DB_DEPTH_SIZE] = [](PS5SIM_HW_CTX_INDIRECT_ARGS) {

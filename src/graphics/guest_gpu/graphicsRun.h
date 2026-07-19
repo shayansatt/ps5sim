@@ -6,6 +6,8 @@
 
 namespace Libs::Graphics {
 
+class CommandProcessor;
+
 class GraphicsRunSubmissionLock final {
 public:
 	GraphicsRunSubmissionLock();
@@ -23,17 +25,11 @@ void GraphicsRunSubmitFlipPreparation();
 void GraphicsRunWait();
 void GraphicsRunDone();
 int  GraphicsRunGetFrameNum();
-[[nodiscard]] bool GraphicsRunIsCommandProcessorThread() noexcept;
-[[nodiscard]] bool GraphicsRunIsGuestMemoryPoll() noexcept;
-[[nodiscard]] bool GraphicsRunIsCommandProcessorGuestAccess() noexcept;
-[[nodiscard]] bool GraphicsRunSubmissionLockHeld() noexcept;
-[[nodiscard]] bool GraphicsRunGpuLockHeld() noexcept;
-// Begin/end an exclusive same-command-processor readback transaction. The begin call finishes
-// work already recorded on that queue and retains the processor lock so its peer draw/constant
-// job cannot record new work until BufferCache publishes the faulted page.
-[[nodiscard]] int GraphicsRunBeginCommandProcessorReadback();
-void              GraphicsRunEndCommandProcessorReadback();
-
+[[nodiscard]] bool              GraphicsRunIsCommandProcessorThread() noexcept;
+[[nodiscard]] CommandProcessor* GraphicsRunCurrentCommandProcessor() noexcept;
+void                            GraphicsRunFinishCommandProcessors();
+[[nodiscard]] bool              GraphicsRunSubmissionLockHeld() noexcept;
+[[nodiscard]] bool              GraphicsRunGpuLockHeld() noexcept;
 } // namespace Libs::Graphics
 
 #endif /* EMULATOR_INCLUDE_EMULATOR_GRAPHICS_GRAPHICSRUN_H_ */

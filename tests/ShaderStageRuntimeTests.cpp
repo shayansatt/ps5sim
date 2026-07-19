@@ -3,7 +3,6 @@
 #include "graphics/shader/recompiler/ResourceMaterialization.h"
 #include "graphics/shader/recompiler/ShaderIR.h"
 
-#include <array>
 #include <cstdio>
 #include <cstdlib>
 #include <memory>
@@ -53,22 +52,7 @@ std::shared_ptr<const Libs::Graphics::ShaderRecompiler::IR::Program> UnbasedFlat
 	return std::make_shared<const Program>(std::move(program));
 }
 
-void TestFailurePreservesPriorStage() {
-	using namespace Libs::Graphics;
-	auto cached_program  = SrtProgram(0x1001);
-	auto prior_program   = std::make_shared<const ShaderRecompiler::IR::Program>();
-	auto prior_resources = std::make_shared<const ShaderRecompiler::IR::ResourceSnapshot>();
-	ShaderStageRuntime stage {prior_program, prior_resources};
-	const std::array<uint32_t, 1> user_data = {};
-	std::string error;
-	Check(!ShaderMaterializeStageRuntime(cached_program, user_data, 0, &stage, &error) &&
-	          error.find("failed at 0x0000000000001000") != std::string::npos,
-	      "unmapped cache ReadConst did not fail through the checked production reader");
-	Check(stage.program == prior_program && stage.resources == prior_resources,
-	      "failed cache rematerialization replaced the prior stage snapshot");
-}
-
-void TestMappedSrtUsesCheckedReaderByDefault() {
+void TestMappedSrtUsesDirectReaderByDefault() {
 	using namespace Libs::Graphics;
 	const uint32_t dword = 0x12345678;
 	auto cached_program  = SrtProgram(reinterpret_cast<uint64_t>(&dword));
@@ -79,7 +63,7 @@ void TestMappedSrtUsesCheckedReaderByDefault() {
 	      "cache rematerialization did not publish the mapped stage");
 	Check(stage.resources->flattened_srt.size() == 1 &&
 	          stage.resources->flattened_srt[0] == dword,
-	      "cache rematerialization did not use the checked reader by default");
+	      "cache rematerialization did not use the direct reader by default");
 }
 
 void TestUnbasedFlatCacheHitFailsClosed() {
@@ -99,8 +83,7 @@ void TestUnbasedFlatCacheHitFailsClosed() {
 } // namespace
 
 int main() {
-	TestFailurePreservesPriorStage();
-	TestMappedSrtUsesCheckedReaderByDefault();
+	TestMappedSrtUsesDirectReaderByDefault();
 	TestUnbasedFlatCacheHitFailsClosed();
 	std::puts("ShaderStageRuntimeTests: all cases passed");
 	return 0;

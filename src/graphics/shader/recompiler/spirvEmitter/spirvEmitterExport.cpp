@@ -50,6 +50,23 @@ uint32_t EmitExportVec4F32(EmitterState* state, const IR::Instruction& inst) {
 	return vec;
 }
 
+uint32_t ApplyMrtExportMapping(EmitterState* state, const IR::Instruction& inst, uint32_t value) {
+	if (inst.export_info.kind != IR::ExportTargetKind::Mrt || state->pixel_input_info == nullptr ||
+	    inst.export_info.index >= state->pixel_input_info->target_export_mapping.size()) {
+		return value;
+	}
+
+	const auto mapping = state->pixel_input_info->target_export_mapping[inst.export_info.index];
+	if (mapping.IsIdentity()) {
+		return value;
+	}
+
+	const auto mapped = state->builder.AllocateId();
+	state->builder.AddFunction({OpVectorShuffle, state->vec4_float_type, mapped, value, value,
+	                            mapping.Map(0), mapping.Map(1), mapping.Map(2), mapping.Map(3)});
+	return mapped;
+}
+
 bool ExportWritesData(const IR::Instruction& inst) {
 	switch (inst.export_info.kind) {
 		case IR::ExportTargetKind::Null:
@@ -97,7 +114,7 @@ void EmitExport(EmitterState* state, const IR::Instruction& inst) {
 		return;
 	}
 
-	const auto value = EmitExportVec4F32(state, inst);
+	const auto value = ApplyMrtExportMapping(state, inst, EmitExportVec4F32(state, inst));
 	if (inst.export_info.kind == IR::ExportTargetKind::Position) {
 		const auto pointer = state->builder.AllocateId();
 		state->builder.AddFunction({OpAccessChain, state->ptr_output_vec4_float, pointer, variable,

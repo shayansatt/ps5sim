@@ -159,6 +159,14 @@ void RegisterProgramMemory(uint64_t vaddr, uint64_t size, Common::VirtualMemory:
 void UpdateProgramMemoryProtection(uint64_t vaddr, uint64_t size, Common::VirtualMemory::Mode mode);
 void UnregisterProgramMemory(uint64_t vaddr, uint64_t size);
 
+#if defined(PS5SIM_VIRTUAL_MEMORY_ALLOCATION_TESTS)
+void TestFailNextPhysicalMemoryUnmap();
+void TestFailPhysicalMemoryUnmapAfter(uint32_t successful_unmaps);
+void TestFailHostReservationAfter(uint32_t successful_pages);
+void TestFailNextFixedReserveRangeRegistration();
+bool TestPlaceholderRangeIsFree(uint64_t vaddr, uint64_t size);
+#endif
+
 } // namespace Libs::LibKernel::Memory
 
 #endif /* EMULATOR_INCLUDE_EMULATOR_KERNEL_MEMORY_H_ */

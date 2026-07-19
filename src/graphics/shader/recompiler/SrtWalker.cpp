@@ -1,9 +1,9 @@
 #include "graphics/shader/recompiler/SrtWalker.h"
 
-#include "graphics/host_gpu/hostMemory.h"
 #include "graphics/shader/recompiler/ScalarProvenance.h"
 
 #include <algorithm>
+#include <cstring>
 #include <fmt/format.h>
 
 namespace Libs::Graphics::ShaderRecompiler::IR {
@@ -485,11 +485,13 @@ private:
 				                        value.pc, base_aligned, relative));
 			}
 		}
-		const auto read_memory =
-		    m_runtime.read_memory != nullptr ? m_runtime.read_memory : HostMemoryReadDword;
-		if (!read_memory(m_runtime.userdata, address, result)) {
+		if (m_runtime.read_memory != nullptr &&
+		    !m_runtime.read_memory(m_runtime.userdata, address, result)) {
 			return Fail(
 			    error, fmt::format("ReadConst pc=0x{:08x} failed at 0x{:016x}", value.pc, address));
+		}
+		if (m_runtime.read_memory == nullptr) {
+			std::memcpy(result, reinterpret_cast<const void*>(address), sizeof(*result));
 		}
 		return true;
 	}

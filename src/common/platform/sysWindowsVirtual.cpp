@@ -4,11 +4,14 @@
 // #error "PS5SIM_PLATFORM != PS5SIM_PLATFORM_WINDOWS"
 #else
 
+#ifndef NOMINMAX
+#define NOMINMAX
+#endif
+#include <windows.h> // IWYU pragma: keep
+
 #include "common/assert.h"
 #include "common/platform/sysVirtual.h"
 #include "common/virtualMemory.h"
-
-#include <windows.h> // IWYU pragma: keep
 
 // IWYU pragma: no_include <basetsd.h>
 // IWYU pragma: no_include <errhandlingapi.h>

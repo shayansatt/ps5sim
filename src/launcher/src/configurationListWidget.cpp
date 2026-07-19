@@ -41,9 +41,9 @@
 #include <QUrl>
 #include <QtCore>
 
-#include "ui_configuration_list_widget.h"
-
 #include <memory>
+
+#include "ui_configuration_list_widget.h"
 
 constexpr char CONF_FILE_NAME[]    = "Ps5Sim.ini";
 constexpr char CONF_ORG_NAME[]     = "Ps5Sim";

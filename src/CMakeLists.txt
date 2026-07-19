@@ -137,7 +137,7 @@ config_compiler_and_linker()
 add_subdirectory("${PS5SIM_THIRD_PARTY_DIR}" "${CMAKE_CURRENT_BINARY_DIR}/3rdparty")
 add_subdirectory(common)
 
-file(GLOB ps5sim_emulator_src
+file(GLOB ps5sim_emulator_src CONFIGURE_DEPENDS
 	libs/*.cpp
 	libs/*.h
 	graphics/*.cpp
@@ -180,12 +180,11 @@ if (PS5SIM_CLANG_CL)
 	set_source_files_properties(${ps5sim_emulator_src} PROPERTIES COMPILE_FLAGS "-Wno-pragma-pack -Wno-deprecated-declarations -D_TIMESPEC_DEFINED")
 endif()
 
-set(ps5sim_emulator_link_libraries common vulkan-1 spirv-tools-opt spirv-tools SDL2-static xxhash FFmpeg::ffmpeg fmt::fmt nlohmann_json::nlohmann_json LibAtrac9)
+set(ps5sim_emulator_link_libraries common Vulkan::Headers spirv-tools-opt spirv-tools SDL2-static xxhash FFmpeg::ffmpeg fmt::fmt nlohmann_json::nlohmann_json LibAtrac9)
 
 set(inc_headers
 	${CMAKE_CURRENT_SOURCE_DIR}
 	${PS5SIM_THIRD_PARTY_DIR}/SDL2/include
-	${PS5SIM_THIRD_PARTY_DIR}/Vulkan-Headers/include
 	${PS5SIM_THIRD_PARTY_DIR}/VulkanMemoryAllocator/include
 	${PS5SIM_THIRD_PARTY_DIR}/SPIRV-Tools/include
 	${PS5SIM_THIRD_PARTY_DIR}/fmt/include
@@ -193,10 +192,6 @@ set(inc_headers
 	${PS5SIM_THIRD_PARTY_DIR}/cpuinfo/include
 	${PS5SIM_THIRD_PARTY_DIR}/stb
 )
-
-if(DEFINED ENV{VULKAN_SDK})
-	list(APPEND inc_headers $ENV{VULKAN_SDK}/Include)
-endif()
 
 if (PS5SIM_CLANG_CL)
 	list(APPEND ps5sim_emulator_link_libraries winpthread)
@@ -289,9 +284,16 @@ add_executable(resource_mutex_tests EXCLUDE_FROM_ALL
 target_link_libraries(resource_mutex_tests common)
 target_include_directories(resource_mutex_tests PRIVATE ${inc_headers})
 
+add_executable(image_page_table_tests EXCLUDE_FROM_ALL
+	../tests/ImagePageTableTests.cpp
+)
+target_include_directories(image_page_table_tests PRIVATE ${inc_headers})
+
 add_ps5sim_full_emulator_test(shader_recompiler_compute_tests ../tests/ShaderRecompilerComputeTests.cpp)
 
 add_ps5sim_full_emulator_test(virtual_memory_allocation_tests ../tests/VirtualMemoryAllocationTests.cpp)
+target_compile_definitions(virtual_memory_allocation_tests PRIVATE
+	PS5SIM_VIRTUAL_MEMORY_ALLOCATION_TESTS=1)
 
 
 add_executable(ps5sim_emulator main.cpp ${ps5sim_emulator_src})

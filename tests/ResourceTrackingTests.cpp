@@ -227,6 +227,21 @@ void TestScalarAndVectorBufferAlias() {
         "scalar/vector alias did not share one dense index");
 }
 
+void TestBufferImageAliasIsLinkedDuringTracking() {
+  Program program;
+  program.blocks.resize(1);
+  program.blocks[0].instructions = {
+      BufferUse(4, 0), BufferUse(8, 8),
+      ImageUse(12, Opcode::ImageLoad, ResourceKind::Image,
+               Decoder::ImageDimension::Dim2D)};
+
+  Prepare(&program);
+  Check(program.info.buffers.size() == 2 && program.info.images.size() == 1 &&
+            program.info.buffers[0].image_alias == 0 &&
+            program.info.buffers[1].image_alias == BufferResource::NoImageAlias,
+        "buffer/image descriptor provenance aliases were not linked during tracking");
+}
+
 void TestImagesAndSamplers() {
   Program program;
   program.blocks.resize(1);
@@ -913,6 +928,8 @@ void TestMaterializationSharesReadConstEvaluation() {
   for (uint32_t i = 0; i < memory.words.size(); i++) {
     memory.words[i] = 0x100 + i;
   }
+  memory.words[3] |=
+      Prospero::GpuEnumValue(Prospero::ImageType::kColor2D) << 28u;
   std::array<uint32_t, 32> user_data{};
   user_data[16] = static_cast<uint32_t>(memory.base);
   user_data[17] = static_cast<uint32_t>(memory.base >> 32u);
@@ -936,6 +953,60 @@ void TestMaterializationSharesReadConstEvaluation() {
     Check(snapshot.images[0].dwords[i] == memory.words[i],
           "materialized image descriptor contains the wrong dword");
   }
+}
+
+void TestInvalidImagesMaterializeAsNull() {
+  Program sampled;
+  sampled.stage = ShaderType::Pixel;
+  sampled.user_data_count = 8;
+  sampled.blocks.resize(1);
+  sampled.blocks[0].instructions = {
+      ImageUse(0x40, Opcode::ImageLoad, ResourceKind::Image,
+               Decoder::ImageDimension::Dim2D)};
+  Prepare(&sampled);
+  Check(sampled.info.images.size() == 1 && sampled.info.samplers.empty(),
+        "sampled-image normalization test has unexpected resource topology");
+
+  constexpr std::array<uint32_t, 8> stale = {
+      0x00000004, 0x00000004, 0xc0061060, 0x06000514,
+      0x20010000, 0xa4580290, 0x00000004, 0x00000001};
+  std::string error;
+  for (uint32_t type = 0; type < 8; type++) {
+    auto descriptor = stale;
+    descriptor[3] = (descriptor[3] & 0x0fffffffu) | (type << 28u);
+    ResourceSnapshot snapshot;
+    Check(MaterializeResources(sampled, {descriptor}, &snapshot, &error) &&
+              snapshot.images.size() == 1 &&
+              std::all_of(snapshot.images[0].dwords.begin(),
+                          snapshot.images[0].dwords.end(),
+                          [](uint32_t word) { return word == 0; }) &&
+              ValidateResourceSpecialization(sampled, snapshot, &error),
+          error.c_str());
+  }
+
+  auto valid = stale;
+  valid[3] = (valid[3] & 0x0fffffffu) |
+             (Prospero::GpuEnumValue(Prospero::ImageType::kColor2D) << 28u);
+  ResourceSnapshot valid_snapshot;
+  Check(MaterializeResources(sampled, {valid}, &valid_snapshot, &error) &&
+            std::equal(valid.begin(), valid.end(),
+                       valid_snapshot.images[0].dwords.begin()),
+        "valid sampled image descriptor was normalized");
+
+  Program storage;
+  storage.stage = ShaderType::Compute;
+  storage.user_data_count = 8;
+  storage.blocks.resize(1);
+  storage.blocks[0].instructions = {
+      ImageUse(0x40, Opcode::ImageStore, ResourceKind::StorageImage,
+               Decoder::ImageDimension::Dim2D)};
+  Prepare(&storage);
+  ResourceSnapshot storage_snapshot;
+  Check(MaterializeResources(storage, {stale}, &storage_snapshot, &error) &&
+            std::all_of(storage_snapshot.images[0].dwords.begin(),
+                        storage_snapshot.images[0].dwords.end(),
+                        [](uint32_t word) { return word == 0; }),
+        "invalid storage image descriptor was not normalized to null");
 }
 
 void TestMaterializationFailureIsTransactional() {
@@ -1737,6 +1808,7 @@ int main() {
   try {
     RUN(TestDenseBufferPatching);
     RUN(TestScalarAndVectorBufferAlias);
+    RUN(TestBufferImageAliasIsLinkedDuringTracking);
     RUN(TestImagesAndSamplers);
     RUN(TestDynamicPhiResource);
     RUN(TestTrackingRequiresCompletedSrtPlan);
@@ -1756,6 +1828,7 @@ int main() {
     RUN(TestSrtPatchingHandlesCfgProducers);
     RUN(TestSrtPatchPlanValidation);
     RUN(TestMaterializationSharesReadConstEvaluation);
+    RUN(TestInvalidImagesMaterializeAsNull);
     RUN(TestMaterializationFailureIsTransactional);
     RUN(TestResourceSpecializationIsTypedAndTransactional);
     RUN(TestRuntimeSpecializationCoversBakedBufferAndAddressFields);

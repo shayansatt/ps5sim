@@ -24,7 +24,7 @@ constexpr int AGC_USER_INTERRUPT_EVENT = 0x1800;
 class RenderContext {
 public:
 	RenderContext() { EXIT_NOT_IMPLEMENTED(!Common::Thread::IsMainThread()); }
-	virtual ~RenderContext() { PS5SIM_NOT_IMPLEMENTED; }
+	~RenderContext() { PS5SIM_NOT_IMPLEMENTED; }
 	PS5SIM_CLASS_NO_COPY(RenderContext);
 
 	void            SetGraphicCtx(GraphicContext* ctx);

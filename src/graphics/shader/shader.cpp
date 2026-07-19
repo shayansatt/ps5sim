@@ -9,10 +9,9 @@
 #include "common/magicEnum.h"
 #include "common/profiler.h"
 #include "common/stringUtils.h"
+#include "graphics/guest_gpu/gpu_defs.h"
 #include "graphics/guest_gpu/graphicsRun.h"
 #include "graphics/guest_gpu/hardwareContext.h"
-#include "graphics/guest_gpu/gpu_defs.h"
-#include "graphics/host_gpu/hostMemory.h"
 #include "graphics/shader/recompiler/ShaderDecoder.h"
 #include "graphics/shader/recompiler/ShaderRecompiler.h"
 #include "graphics/shader/shaderVertexMetadata.h"
@@ -204,11 +203,6 @@ static void ExitShaderRecompilerFailure(const char* label, uint64_t shader_hash,
                                         const char* reason) {
 	EXIT("%s failed hash=0x%016" PRIx64 ": %s\n", label, shader_hash,
 	     reason != nullptr ? reason : "");
-}
-
-bool ShaderBindingResearchGuardEnabled() {
-	return Config::GraphicsDebugDumpEnabled() ||
-	       Config::GetShaderLogDirection() != Config::ShaderLogDirection::Silent;
 }
 
 static const ShaderBinaryInfo* GetBinaryInfo(const uint32_t* code) {
@@ -563,14 +557,18 @@ static uint32_t VertexAttribFormatToBufferFormat(uint32_t format) {
 	    {Prospero::VertexAttribFormat::k10_11_11Float, Prospero::BufferFormat::k10_11_11Float},
 	    {Prospero::VertexAttribFormat::k2_10_10_10UNorm, Prospero::BufferFormat::k2_10_10_10UNorm},
 	    {Prospero::VertexAttribFormat::k2_10_10_10SNorm, Prospero::BufferFormat::k2_10_10_10SNorm},
-	    {Prospero::VertexAttribFormat::k2_10_10_10UScaled, Prospero::BufferFormat::k2_10_10_10UScaled},
-	    {Prospero::VertexAttribFormat::k2_10_10_10SScaled, Prospero::BufferFormat::k2_10_10_10SScaled},
+	    {Prospero::VertexAttribFormat::k2_10_10_10UScaled,
+	     Prospero::BufferFormat::k2_10_10_10UScaled},
+	    {Prospero::VertexAttribFormat::k2_10_10_10SScaled,
+	     Prospero::BufferFormat::k2_10_10_10SScaled},
 	    {Prospero::VertexAttribFormat::k2_10_10_10UInt, Prospero::BufferFormat::k2_10_10_10UInt},
 	    {Prospero::VertexAttribFormat::k2_10_10_10SInt, Prospero::BufferFormat::k2_10_10_10SInt},
 	    {Prospero::VertexAttribFormat::k10_10_10_2UNorm, Prospero::BufferFormat::k10_10_10_2UNorm},
 	    {Prospero::VertexAttribFormat::k10_10_10_2SNorm, Prospero::BufferFormat::k10_10_10_2SNorm},
-	    {Prospero::VertexAttribFormat::k10_10_10_2UScaled, Prospero::BufferFormat::k10_10_10_2UScaled},
-	    {Prospero::VertexAttribFormat::k10_10_10_2SScaled, Prospero::BufferFormat::k10_10_10_2SScaled},
+	    {Prospero::VertexAttribFormat::k10_10_10_2UScaled,
+	     Prospero::BufferFormat::k10_10_10_2UScaled},
+	    {Prospero::VertexAttribFormat::k10_10_10_2SScaled,
+	     Prospero::BufferFormat::k10_10_10_2SScaled},
 	    {Prospero::VertexAttribFormat::k10_10_10_2UInt, Prospero::BufferFormat::k10_10_10_2UInt},
 	    {Prospero::VertexAttribFormat::k10_10_10_2SInt, Prospero::BufferFormat::k10_10_10_2SInt},
 	    {Prospero::VertexAttribFormat::k8_8_8_8UNorm, Prospero::BufferFormat::k8_8_8_8UNorm},
@@ -582,19 +580,25 @@ static uint32_t VertexAttribFormatToBufferFormat(uint32_t format) {
 	    {Prospero::VertexAttribFormat::k32_32UInt, Prospero::BufferFormat::k32_32UInt},
 	    {Prospero::VertexAttribFormat::k32_32SInt, Prospero::BufferFormat::k32_32SInt},
 	    {Prospero::VertexAttribFormat::k32_32Float, Prospero::BufferFormat::k32_32Float},
-	    {Prospero::VertexAttribFormat::k16_16_16_16UNorm, Prospero::BufferFormat::k16_16_16_16UNorm},
-	    {Prospero::VertexAttribFormat::k16_16_16_16SNorm, Prospero::BufferFormat::k16_16_16_16SNorm},
-	    {Prospero::VertexAttribFormat::k16_16_16_16UScaled, Prospero::BufferFormat::k16_16_16_16UScaled},
-	    {Prospero::VertexAttribFormat::k16_16_16_16SScaled, Prospero::BufferFormat::k16_16_16_16SScaled},
+	    {Prospero::VertexAttribFormat::k16_16_16_16UNorm,
+	     Prospero::BufferFormat::k16_16_16_16UNorm},
+	    {Prospero::VertexAttribFormat::k16_16_16_16SNorm,
+	     Prospero::BufferFormat::k16_16_16_16SNorm},
+	    {Prospero::VertexAttribFormat::k16_16_16_16UScaled,
+	     Prospero::BufferFormat::k16_16_16_16UScaled},
+	    {Prospero::VertexAttribFormat::k16_16_16_16SScaled,
+	     Prospero::BufferFormat::k16_16_16_16SScaled},
 	    {Prospero::VertexAttribFormat::k16_16_16_16UInt, Prospero::BufferFormat::k16_16_16_16UInt},
 	    {Prospero::VertexAttribFormat::k16_16_16_16SInt, Prospero::BufferFormat::k16_16_16_16SInt},
-	    {Prospero::VertexAttribFormat::k16_16_16_16Float, Prospero::BufferFormat::k16_16_16_16Float},
+	    {Prospero::VertexAttribFormat::k16_16_16_16Float,
+	     Prospero::BufferFormat::k16_16_16_16Float},
 	    {Prospero::VertexAttribFormat::k32_32_32UInt, Prospero::BufferFormat::k32_32_32UInt},
 	    {Prospero::VertexAttribFormat::k32_32_32SInt, Prospero::BufferFormat::k32_32_32SInt},
 	    {Prospero::VertexAttribFormat::k32_32_32Float, Prospero::BufferFormat::k32_32_32Float},
 	    {Prospero::VertexAttribFormat::k32_32_32_32UInt, Prospero::BufferFormat::k32_32_32_32UInt},
 	    {Prospero::VertexAttribFormat::k32_32_32_32SInt, Prospero::BufferFormat::k32_32_32_32SInt},
-	    {Prospero::VertexAttribFormat::k32_32_32_32Float, Prospero::BufferFormat::k32_32_32_32Float},
+	    {Prospero::VertexAttribFormat::k32_32_32_32Float,
+	     Prospero::BufferFormat::k32_32_32_32Float},
 	};
 
 	for (const auto& entry: format_map) {
@@ -785,31 +789,6 @@ static bool ShaderGetStaticInputInfoVS(const HW::VertexShaderInfo* regs,
 			     shader_addr);
 			return false;
 		}
-		uint32_t max_semantic = 0;
-		for (uint32_t i = 0; i < metadata.input_semantics_count; i++) {
-			max_semantic =
-			    std::max(max_semantic, static_cast<uint32_t>(metadata.input_semantics[i].semantic));
-		}
-		if (!HostMemoryRangeIsReadable(reinterpret_cast<uint64_t>(attrib),
-		                               static_cast<uint64_t>(max_semantic + 1) *
-		                                   sizeof(uint32_t))) {
-			LOGF("ShaderGetInputInfoVS(): unreadable vertex attribute table shader=0x%016" PRIx64
-			     "\n",
-			     shader_addr);
-			return false;
-		}
-		uint32_t max_buffer = 0;
-		for (uint32_t i = 0; i < metadata.input_semantics_count; i++) {
-			max_buffer = std::max(max_buffer, attrib[metadata.input_semantics[i].semantic] & 0x1fu);
-		}
-		if (!HostMemoryRangeIsReadable(reinterpret_cast<uint64_t>(buffer),
-		                               static_cast<uint64_t>(max_buffer + 1) * 4 *
-		                                   sizeof(uint32_t))) {
-			LOGF("ShaderGetInputInfoVS(): unreadable vertex buffer table shader=0x%016" PRIx64 "\n",
-			     shader_addr);
-			return false;
-		}
-
 		ShaderApplyAttribSemantics(info, metadata.input_semantics.data(),
 		                           metadata.input_semantics_count, attrib, buffer);
 		ShaderDetectBuffers(info);
@@ -817,10 +796,11 @@ static bool ShaderGetStaticInputInfoVS(const HW::VertexShaderInfo* regs,
 	return true;
 }
 
-static void ShaderGetStaticInputInfoPS(const HW::PixelShaderInfo*   regs,
-                                       const HW::ShaderRegisters*   sh,
-                                       const ShaderVertexInputInfo* vs_info,
-                                       ShaderPixelInputInfo*        ps_info) {
+static void ShaderGetStaticInputInfoPS(
+    const HW::PixelShaderInfo* regs, const HW::ShaderRegisters* sh,
+    const ShaderVertexInputInfo*                        vs_info,
+    std::span<const Prospero::ColorComponentMapping, 8> target_export_mapping,
+    ShaderPixelInputInfo*                               ps_info) {
 	PS5SIM_PROFILER_FUNCTION();
 
 	EXIT_IF(vs_info == nullptr);
@@ -859,7 +839,10 @@ static void ShaderGetStaticInputInfoPS(const HW::PixelShaderInfo*   regs,
 	        : 0;
 
 	for (int i = 0; i < 8; i++) {
-		ps_info->target_output_mode[i] = sh->target_output_mode[i];
+		ps_info->target_output_mode[i]    = sh->target_output_mode[i];
+		ps_info->target_export_mapping[i] = sh->target_output_mode[i] != 0
+		                                        ? target_export_mapping[i]
+		                                        : Prospero::ColorComponentMapping {};
 	}
 	ps_info->mrt_output_mask = 0;
 }
@@ -1131,11 +1114,12 @@ bool ShaderCompileInfoVS(const HW::VertexShaderInfo* regs, const HW::ShaderRegis
 
 bool ShaderCompileInfoPS(const HW::PixelShaderInfo* regs, const HW::ShaderRegisters* sh,
                          ShaderLaneMaskMode lane_mask_mode, const ShaderVertexInputInfo* vs_info,
+                         std::span<const Prospero::ColorComponentMapping, 8> target_export_mapping,
                          ShaderPixelInputInfo* ps_info, std::span<const uint32_t>* spirv) {
 	EXIT_IF(spirv == nullptr);
 	*spirv = {};
 
-	ShaderGetStaticInputInfoPS(regs, sh, vs_info, ps_info);
+	ShaderGetStaticInputInfoPS(regs, sh, vs_info, target_export_mapping, ps_info);
 	const auto shader_hash =
 	    regs->ps_regs.chksum != 0 ? regs->ps_regs.chksum : regs->ps_regs.data_addr;
 	const auto program_id = ShaderGetIdPS(regs, ps_info, false);
@@ -1657,6 +1641,14 @@ ShaderId ShaderGetIdPS(const HW::PixelShaderInfo* regs, const ShaderPixelInputIn
 
 	for (auto mode: input_info->target_output_mode) {
 		ret.ids.push_back(mode);
+	}
+	for (uint32_t base = 0; base < input_info->target_export_mapping.size(); base += 4u) {
+		uint32_t packed = 0;
+		for (uint32_t i = 0; i < 4u; i++) {
+			packed |= static_cast<uint32_t>(input_info->target_export_mapping[base + i].packed)
+			          << (i * 8u);
+		}
+		ret.ids.push_back(packed);
 	}
 	ret.ids.push_back(input_info->mrt_output_mask);
 

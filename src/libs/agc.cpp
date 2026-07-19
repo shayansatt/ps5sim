@@ -6,14 +6,14 @@
 #include "common/logging/log.h"
 #include "common/stringUtils.h"
 #include "common/virtualMemory.h"
+#include "graphics/guest_gpu/gpu_defs.h"
 #include "graphics/guest_gpu/graphicsRun.h"
 #include "graphics/guest_gpu/hardwareContext.h"
 #include "graphics/guest_gpu/pm4.h"
-#include "graphics/guest_gpu/gpu_defs.h"
 #include "graphics/guest_gpu/tile.h"
-#include "graphics/host_gpu/hostMemory.h"
 #include "graphics/host_gpu/objects/label.h"
 #include "graphics/host_gpu/renderer/render.h"
+#include "graphics/host_gpu/renderer/sync.h"
 #include "graphics/presentation/renderDoc.h"
 #include "graphics/presentation/videoOut.h"
 #include "graphics/presentation/window.h"
@@ -373,11 +373,6 @@ struct Label {
 	uint64_t          m_reserved[3];
 };
 
-static bool is_readable_command_packet_range(const uint32_t* cmd, uint32_t num_dw) {
-	return HostMemoryRangeIsReadable(reinterpret_cast<uintptr_t>(cmd),
-	                                 static_cast<uint64_t>(num_dw) * sizeof(uint32_t));
-}
-
 int PS5SIM_SYSV_ABI GraphicsInit(uint32_t* state, uint32_t ver) {
 	PRINT_NAME();
 
@@ -580,8 +575,12 @@ static bool get_shader_program_address_register(uint8_t type, uint32_t* lo_offse
 		case Prospero::ShaderBinaryType::kPs: *lo_offset = Pm4::SPI_SHADER_PGM_LO_PS; return true;
 		case Prospero::ShaderBinaryType::kGs: *lo_offset = Pm4::SPI_SHADER_PGM_LO_ES; return true;
 		case Prospero::ShaderBinaryType::kHs: *lo_offset = Pm4::SPI_SHADER_PGM_LO_LS; return true;
-		case Prospero::ShaderBinaryType::kGsBack: *lo_offset = Pm4::SPI_SHADER_PGM_LO_GS; return true;
-		case Prospero::ShaderBinaryType::kHsBack: *lo_offset = Pm4::SPI_SHADER_PGM_LO_HS; return true;
+		case Prospero::ShaderBinaryType::kGsBack:
+			*lo_offset = Pm4::SPI_SHADER_PGM_LO_GS;
+			return true;
+		case Prospero::ShaderBinaryType::kHsBack:
+			*lo_offset = Pm4::SPI_SHADER_PGM_LO_HS;
+			return true;
 		case Prospero::ShaderBinaryType::kGsFront:
 		case Prospero::ShaderBinaryType::kHsFront:
 		case Prospero::ShaderBinaryType::kFs: return false;
@@ -1021,12 +1020,14 @@ int PS5SIM_SYSV_ABI GraphicsSetUcRegIndirectPatchAddRegisters(uint32_t* cmd, uin
 
 static uint32_t GraphicsPrimitiveTypeToGsOut(uint32_t prim_type) {
 	switch (static_cast<Prospero::PrimitiveType>(prim_type)) {
-		case Prospero::PrimitiveType::kPointList: return Prospero::GpuEnumValue(Prospero::GsOutputPrimitiveType::kPoints);
+		case Prospero::PrimitiveType::kPointList:
+			return Prospero::GpuEnumValue(Prospero::GsOutputPrimitiveType::kPoints);
 		case Prospero::PrimitiveType::kLineList:
 		case Prospero::PrimitiveType::kLineStrip:
 		case Prospero::PrimitiveType::kLineListAdjacency:
 		case Prospero::PrimitiveType::kLineStripAdjacency:
-		case Prospero::PrimitiveType::kLineLoop: return Prospero::GpuEnumValue(Prospero::GsOutputPrimitiveType::kLines);
+		case Prospero::PrimitiveType::kLineLoop:
+			return Prospero::GpuEnumValue(Prospero::GsOutputPrimitiveType::kLines);
 		case Prospero::PrimitiveType::kRectList:
 			return Prospero::GpuEnumValue(Prospero::GsOutputPrimitiveType::k2dRectangle);
 		case Prospero::PrimitiveType::kRectListLegacy:
@@ -1053,9 +1054,10 @@ int PS5SIM_SYSV_ABI GraphicsCreatePrimState(ShaderRegister* cx_regs, ShaderRegis
 
 	EXIT_NOT_IMPLEMENTED(gs == nullptr);
 
-	EXIT_NOT_IMPLEMENTED(hs != nullptr &&
-	                     static_cast<Prospero::ShaderBinaryType>(hs->type) != Prospero::ShaderBinaryType::kHs);
-	EXIT_NOT_IMPLEMENTED(static_cast<Prospero::ShaderBinaryType>(gs->type) != Prospero::ShaderBinaryType::kGs);
+	EXIT_NOT_IMPLEMENTED(hs != nullptr && static_cast<Prospero::ShaderBinaryType>(hs->type) !=
+	                                          Prospero::ShaderBinaryType::kHs);
+	EXIT_NOT_IMPLEMENTED(static_cast<Prospero::ShaderBinaryType>(gs->type) !=
+	                     Prospero::ShaderBinaryType::kGs);
 
 	if (cx_regs != nullptr) {
 		EXIT_NOT_IMPLEMENTED(hs != nullptr && hs->specials->vgt_shader_stages_en.offset !=
@@ -3750,8 +3752,7 @@ static void flush_pending_graphics_segment_before_acb(const uint32_t* acb,
 		if (!wait_addresses.empty() && Gen5::g_pending_graphics_segment.start != nullptr) {
 			auto* scan        = Gen5::g_pending_graphics_segment.start;
 			auto* matched_end = Gen5::g_pending_graphics_segment.start;
-			while (scan < Gen5::g_pending_graphics_segment.end &&
-			       Gen5::is_readable_command_packet_range(scan, 1)) {
+			while (scan < Gen5::g_pending_graphics_segment.end) {
 				auto cmd_id = *scan;
 				if (cmd_id == 0x80000000u) {
 					scan++;
@@ -3763,8 +3764,7 @@ static void flush_pending_graphics_segment_before_acb(const uint32_t* acb,
 
 				auto len = PS5SIM_PM4_LEN(cmd_id);
 				if (len == 0 ||
-				    len > static_cast<uint32_t>(Gen5::g_pending_graphics_segment.end - scan) ||
-				    !Gen5::is_readable_command_packet_range(scan, len)) {
+				    len > static_cast<uint32_t>(Gen5::g_pending_graphics_segment.end - scan)) {
 					break;
 				}
 
@@ -3789,8 +3789,7 @@ static void flush_pending_graphics_segment_before_acb(const uint32_t* acb,
 		    Gen5::g_pending_graphics_segment.end > Gen5::g_pending_graphics_segment.start) {
 			auto* scan      = Gen5::g_pending_graphics_segment.start;
 			auto* valid_end = Gen5::g_pending_graphics_segment.start;
-			while (scan < Gen5::g_pending_graphics_segment.end &&
-			       Gen5::is_readable_command_packet_range(scan, 1)) {
+			while (scan < Gen5::g_pending_graphics_segment.end) {
 				auto cmd_id = *scan;
 				if (cmd_id == 0x80000000u) {
 					scan++;
@@ -3803,8 +3802,7 @@ static void flush_pending_graphics_segment_before_acb(const uint32_t* acb,
 
 				auto len = PS5SIM_PM4_LEN(cmd_id);
 				if (len == 0 ||
-				    len > static_cast<uint32_t>(Gen5::g_pending_graphics_segment.end - scan) ||
-				    !Gen5::is_readable_command_packet_range(scan, len)) {
+				    len > static_cast<uint32_t>(Gen5::g_pending_graphics_segment.end - scan)) {
 					break;
 				}
 
@@ -3931,16 +3929,14 @@ int PS5SIM_SYSV_ABI GraphicsDriverSubmitMultiCommandBuffers(uint32_t queue, uint
 }
 
 static void submit_acb(uint32_t queue, uint32_t* acb, uint32_t size_in_dwords) {
-	if (acb != nullptr && size_in_dwords >= 5 && Gen5::is_readable_command_packet_range(acb, 5)) {
+	if (acb != nullptr && size_in_dwords >= 5) {
 		auto descriptor_addr =
 		    static_cast<uint64_t>(acb[0]) | (static_cast<uint64_t>(acb[1]) << 32u);
 		auto descriptor_size  = acb[2];
 		auto descriptor_flags = acb[3];
 		auto descriptor_magic = acb[4];
 		if (descriptor_addr != 0 && descriptor_size != 0 && descriptor_flags == 0 &&
-		    descriptor_magic == 0x5533ccaau &&
-		    Gen5::is_readable_command_packet_range(reinterpret_cast<uint32_t*>(descriptor_addr),
-		                                           descriptor_size)) {
+		    descriptor_magic == 0x5533ccaau) {
 			LOGF("\t descriptor addr = 0x%016" PRIx64 "\n"
 			     "\t descriptor size = 0x%08" PRIx32 "\n"
 			     "\t descriptor magic = 0x%08" PRIx32 "\n",
@@ -3976,11 +3972,6 @@ int PS5SIM_SYSV_ABI GraphicsDriverSubmitAcb(uint32_t queue, const Packet* packet
 	if (packet == nullptr) {
 		return OK;
 	}
-	if (!Gen5::is_readable_command_packet_range(reinterpret_cast<const uint32_t*>(packet),
-	                                            sizeof(Packet) / sizeof(uint32_t))) {
-		return OK;
-	}
-
 	LOGF("\t acb   = 0x%016" PRIx64 "\n"
 	     "\t size  = 0x%08" PRIx32 "\n"
 	     "\t flags = 0x%02" PRIx8 "\n",
@@ -4021,7 +4012,7 @@ int PS5SIM_SYSV_ABI GraphicsDriverAddEqEvent(LibKernel::EventQueue::KernelEqueue
 		return LibKernel::KERNEL_ERROR_EBADF;
 	}
 
-	return GraphicsRenderAddEqEvent(eq, id, udata);
+	return Sync::AddEqEvent(eq, id, udata);
 }
 
 int PS5SIM_SYSV_ABI GraphicsDriverDeleteEqEvent(LibKernel::EventQueue::KernelEqueue eq, int id) {
@@ -4031,7 +4022,7 @@ int PS5SIM_SYSV_ABI GraphicsDriverDeleteEqEvent(LibKernel::EventQueue::KernelEqu
 		return LibKernel::KERNEL_ERROR_EBADF;
 	}
 
-	return GraphicsRenderDeleteEqEvent(eq, id);
+	return Sync::DeleteEqEvent(eq, id);
 }
 
 int PS5SIM_SYSV_ABI GraphicsDriverGetEqEventType(const LibKernel::EventQueue::KernelEvent* ev) {

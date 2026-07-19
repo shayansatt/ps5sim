@@ -151,10 +151,10 @@ public:
 			return false;
 		}
 		auto* destination = static_cast<uint8_t*>(data);
-		return TryTransferBacking(vaddr, size,
-		                          [destination](uint8_t* backing, uint64_t data_offset, size_t bytes) {
-			                          std::memcpy(destination + data_offset, backing, bytes);
-		                          });
+		return TryTransferBacking(
+		    vaddr, size, [destination](uint8_t* backing, uint64_t data_offset, size_t bytes) {
+			    std::memcpy(destination + data_offset, backing, bytes);
+		    });
 	}
 
 	uint64_t MapAligned(uint64_t search_addr, uint64_t size, uint64_t backing_offset,
@@ -342,7 +342,7 @@ public:
 		MapEntry old {};
 		{
 			std::lock_guard lock(m_mutex);
-			auto next = m_maps.upper_bound(vaddr);
+			auto            next = m_maps.upper_bound(vaddr);
 			if (next != m_maps.begin()) {
 				auto entry = std::prev(next);
 				if (vaddr + size <= entry->second.vaddr + entry->second.size) {
@@ -497,8 +497,8 @@ public:
 
 		constexpr uint64_t test_value = 0x4b595459414c4941ull; // "PS5SIM" alias magic
 		EXIT_IF(!VirtualMemory::Protect(first, test_size, VirtualMemory::Mode::NoAccess));
-		const bool ok = TryWriteBacking(first, &test_value, sizeof(test_value)) &&
-		                *second_ptr == test_value;
+		const bool ok =
+		    TryWriteBacking(first, &test_value, sizeof(test_value)) && *second_ptr == test_value;
 		const uint64_t clear = 0;
 		EXIT_IF(!TryWriteBacking(first, &clear, sizeof(clear)));
 
@@ -518,8 +518,8 @@ private:
 		}
 
 		std::lock_guard lock(m_mutex);
-		const auto end     = vaddr + size;
-		auto       current = vaddr;
+		const auto      end     = vaddr + size;
+		auto            current = vaddr;
 		while (current < end) {
 			MapEntry entry {};
 			if (!FindContainingUnlocked(current, 1, &entry)) {
@@ -609,24 +609,24 @@ private:
 
 	[[nodiscard]] bool ShouldChunkMap(uint64_t size) const { return size > GetMapChunkSize(); }
 
-	uint64_t MapNewPlaceholderAligned(uint64_t search_addr, uint64_t size,
-	                                  uint64_t backing_offset, VirtualMemory::Mode mode,
-	                                  uint64_t alignment, FailureReason* failure_reason) {
+	uint64_t MapNewPlaceholderAligned(uint64_t search_addr, uint64_t size, uint64_t backing_offset,
+	                                  VirtualMemory::Mode mode, uint64_t alignment,
+	                                  FailureReason* failure_reason) {
 		MEM_ADDRESS_REQUIREMENTS requirements {};
 		MEM_EXTENDED_PARAMETER   parameter {};
-		const auto aligned_search =
-		    (search_addr + alignment - 1u) & ~(alignment - 1u);
-		requirements.LowestStartingAddress = reinterpret_cast<void*>(
-		    search_addr != 0 ? aligned_search : HOST_SYSTEM_MANAGED_MIN);
+		const auto aligned_search = (search_addr + alignment - 1u) & ~(alignment - 1u);
+		requirements.LowestStartingAddress =
+		    reinterpret_cast<void*>(search_addr != 0 ? aligned_search : HOST_SYSTEM_MANAGED_MIN);
 		requirements.HighestEndingAddress =
 		    reinterpret_cast<void*>(search_addr != 0 ? HOST_USER_MAX : HOST_SYSTEM_MANAGED_MAX);
 		requirements.Alignment = alignment;
-		parameter.Type          = MemExtendedParameterAddressRequirements;
-		parameter.Pointer       = &requirements;
+		parameter.Type         = MemExtendedParameterAddressRequirements;
+		parameter.Pointer      = &requirements;
 
 		auto reserve = [&]() {
 			return VirtualAlloc2(GetCurrentProcess(), nullptr, size,
-			                     MEM_RESERVE | MEM_RESERVE_PLACEHOLDER, PAGE_NOACCESS, &parameter, 1);
+			                     MEM_RESERVE | MEM_RESERVE_PLACEHOLDER, PAGE_NOACCESS, &parameter,
+			                     1);
 		};
 		auto* placeholder = reserve();
 		if (placeholder == nullptr && search_addr == 0) {
@@ -1056,9 +1056,9 @@ private:
 	int m_fd = -1;
 #endif
 
-	uint8_t*              m_backing_base = nullptr;
-	uint64_t              m_size         = 0;
-	std::mutex            m_mutex;
+	uint8_t*                     m_backing_base = nullptr;
+	uint64_t                     m_size         = 0;
+	std::mutex                   m_mutex;
 	std::map<uint64_t, MapEntry> m_maps;
 };
 
@@ -1098,8 +1098,8 @@ public:
 		if (ptr == nullptr && search_addr == 0) {
 			req.LowestStartingAddress = reinterpret_cast<void*>(HOST_USER_MIN);
 			req.HighestEndingAddress  = reinterpret_cast<void*>(HOST_USER_MAX);
-			ptr                       = VirtualAlloc2(GetCurrentProcess(), nullptr, size,
-			                                          MEM_RESERVE | MEM_RESERVE_PLACEHOLDER, PAGE_NOACCESS, &param, 1);
+			ptr = VirtualAlloc2(GetCurrentProcess(), nullptr, size,
+			                    MEM_RESERVE | MEM_RESERVE_PLACEHOLDER, PAGE_NOACCESS, &param, 1);
 		}
 		if (ptr == nullptr) {
 			return 0;
@@ -1160,6 +1160,17 @@ public:
 		return false;
 #endif
 	}
+
+#if defined(PS5SIM_VIRTUAL_MEMORY_ALLOCATION_TESTS)
+	bool TestContainsFree(uint64_t vaddr, uint64_t size) {
+#if PS5SIM_PLATFORM == PS5SIM_PLATFORM_WINDOWS
+		std::lock_guard lock(m_mutex);
+		return FindContaining(vaddr, size) != m_free.end();
+#else
+		return false;
+#endif
+	}
+#endif
 
 	bool ReleaseFree(uint64_t vaddr, uint64_t size) {
 #if PS5SIM_PLATFORM == PS5SIM_PLATFORM_WINDOWS

@@ -4,13 +4,17 @@
 // #error "PS5SIM_PLATFORM != PS5SIM_PLATFORM_WINDOWS"
 #else
 
+#ifndef NOMINMAX
+#define NOMINMAX
+#endif
+#include <windows.h> // IWYU pragma: keep
+
 #include "common/platform/sysFileIO.h"
 #include "common/platform/sysTimer.h"
 #include "common/stringUtils.h"
 
 #include <cstdlib>
 #include <vector>
-#include <windows.h> // IWYU pragma: keep
 
 // NOLINTNEXTLINE(readability-identifier-naming)
 enum sys_file_type_t {

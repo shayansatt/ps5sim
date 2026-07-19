@@ -1,14 +1,12 @@
 #include "graphics/host_gpu/objects/label.h"
 
 #include "common/assert.h"
-#include "common/logging/log.h"
-#include "kernel/memory.h"
 #include "common/threads.h"
 #include "graphics/host_gpu/graphicContext.h"
 #include "graphics/host_gpu/renderer/render.h"
+#include "graphics/host_gpu/vulkanCommon.h"
 
 #include <algorithm>
-#include <atomic>
 #include <memory>
 #include <vector>
 
@@ -22,22 +20,18 @@ enum LabelStatus {
 };
 
 struct LabelCallbacks {
-	uint64_t*     dst_gpu_addr64       = nullptr;
-	uint64_t      value64              = 0;
-	uint32_t*     dst_gpu_addr32       = nullptr;
-	uint32_t      value32              = 0;
 	LabelCallback callback_1           = nullptr;
 	LabelCallback callback_2           = nullptr;
 	uint64_t      args[LABEL_ARGS_MAX] = {};
 };
 
 struct LabelEvent final {
-	VkDevice device = nullptr;
-	VkEvent  event  = nullptr;
+	vk::Device device = nullptr;
+	vk::Event  event  = nullptr;
 
 	~LabelEvent() {
 		if (event != nullptr) {
-			vkDestroyEvent(device, event, nullptr);
+			device.destroyEvent(event, nullptr);
 		}
 	}
 };
@@ -48,7 +42,7 @@ struct LabelSubmission {
 };
 
 struct Label {
-	VkDevice                     device = nullptr;
+	vk::Device                   device = nullptr;
 	LabelStatus                  status = LabelStatus::New;
 	LabelCallbacks               callbacks;
 	std::vector<LabelSubmission> submissions;
@@ -64,10 +58,8 @@ public:
 	~LabelManager() { PS5SIM_NOT_IMPLEMENTED; }
 	PS5SIM_CLASS_NO_COPY(LabelManager);
 
-	Label* Create64(GraphicContext* ctx, uint64_t* dst_gpu_addr, uint64_t value,
-	                LabelCallback callback_1, LabelCallback callback_2, const uint64_t* args);
-	Label* Create32(GraphicContext* ctx, uint32_t* dst_gpu_addr, uint32_t value,
-	                LabelCallback callback_1, LabelCallback callback_2, const uint64_t* args);
+	Label* Create(GraphicContext* ctx, LabelCallback callback_1, LabelCallback callback_2,
+	              const uint64_t* args);
 	void   Delete(Label* label);
 	void   Set(CommandBuffer* buffer, Label* label);
 	void   Drain();
@@ -75,9 +67,6 @@ public:
 private:
 	static void ThreadRun(void* data);
 
-	template <typename T>
-	Label*      Create(GraphicContext* ctx, T* dst_gpu_addr, T value, LabelCallback callback_1,
-	                   LabelCallback callback_2, const uint64_t* args);
 	bool        Remove(Label* label);
 	static void Destroy(Label* label);
 
@@ -89,11 +78,6 @@ private:
 
 static LabelManager*     g_label_manager     = nullptr;
 static thread_local bool g_in_label_callback = false;
-
-template <typename T>
-void WriteGuestLabel(T* address, T value) {
-	LabelWriteGuestMemory(address, &value, sizeof(value));
-}
 
 class LabelCallbackScope final {
 public:
@@ -132,15 +116,14 @@ void LabelManager::ThreadRun(void* data) {
 				    it->completion->event == nullptr) {
 					EXIT("GPU label submission has no completion event\n");
 				}
-				const auto status =
-				    vkGetEventStatus(it->completion->device, it->completion->event);
+				const auto status = it->completion->device.getEventStatus(it->completion->event);
 				switch (status) {
-					case VK_EVENT_SET:
+					case vk::Result::eEventSet:
 						fired_labels.push_back(it->callbacks);
 						finished_submissions.push_back(*it);
 						it = label->submissions.erase(it);
 						break;
-					case VK_EVENT_RESET: ++it; break;
+					case vk::Result::eEventReset: ++it; break;
 					default: EXIT("vkGetEventStatus returned an unexpected result\n");
 				}
 			}
@@ -180,35 +163,9 @@ void LabelManager::ThreadRun(void* data) {
 
 		for (auto& label: fired_labels) {
 			LabelCallbackScope callback_scope;
-			bool               write = true;
 
 			if (label.callback_1 != nullptr) {
-				write = label.callback_1(label.args);
-			}
-
-			if (write && label.dst_gpu_addr64 != nullptr) {
-				// Publishing EOP fences through physical backing keeps a fence word coherent even
-				// when unrelated bytes on its host page are
-				// protected for BufferCache GPU ownership.
-				WriteGuestLabel(label.dst_gpu_addr64, label.value64);
-
-				static std::atomic<uint32_t> log_count {0};
-				if (log_count.fetch_add(1) < 256) {
-					LOGF_COLOR(Log::Color::BrightGreen,
-					           "EndOfPipe Signal!!! [0x%016" PRIx64 "] <- 0x%016" PRIx64 "\n",
-					           reinterpret_cast<uint64_t>(label.dst_gpu_addr64), label.value64);
-				}
-			}
-
-			if (write && label.dst_gpu_addr32 != nullptr) {
-				WriteGuestLabel(label.dst_gpu_addr32, label.value32);
-
-				static std::atomic<uint32_t> log_count {0};
-				if (log_count.fetch_add(1) < 256) {
-					LOGF_COLOR(Log::Color::BrightGreen,
-					           "EndOfPipe Signal!!! [0x%016" PRIx64 "] <- 0x%08" PRIx32 "\n",
-					           reinterpret_cast<uint64_t>(label.dst_gpu_addr32), label.value32);
-				}
+				(void)label.callback_1(label.args);
 			}
 
 			if (label.callback_2 != nullptr) {
@@ -229,29 +186,15 @@ void LabelManager::ThreadRun(void* data) {
 	}
 }
 
-template <typename T>
-Label* LabelManager::Create(GraphicContext* ctx, T* dst_gpu_addr, T value, LabelCallback callback_1,
-                            LabelCallback callback_2, const uint64_t* args) {
-	static_assert(sizeof(T) == sizeof(uint32_t) || sizeof(T) == sizeof(uint64_t));
-
+Label* LabelManager::Create(GraphicContext* ctx, LabelCallback callback_1, LabelCallback callback_2,
+                            const uint64_t* args) {
 	EXIT_IF(ctx == nullptr);
 
 	Common::LockGuard lock(m_mutex);
 
 	auto* label = new Label;
 
-	label->status = LabelStatus::New;
-	if constexpr (sizeof(T) == sizeof(uint64_t)) {
-		label->callbacks.dst_gpu_addr64 = dst_gpu_addr;
-		label->callbacks.value64        = value;
-		label->callbacks.dst_gpu_addr32 = nullptr;
-		label->callbacks.value32        = 0;
-	} else {
-		label->callbacks.dst_gpu_addr32 = dst_gpu_addr;
-		label->callbacks.value32        = value;
-		label->callbacks.dst_gpu_addr64 = nullptr;
-		label->callbacks.value64        = 0;
-	}
+	label->status               = LabelStatus::New;
 	label->device               = ctx->device;
 	label->callbacks.callback_1 = callback_1;
 	label->callbacks.callback_2 = callback_2;
@@ -265,18 +208,6 @@ Label* LabelManager::Create(GraphicContext* ctx, T* dst_gpu_addr, T value, Label
 	m_labels.push_back(label);
 
 	return label;
-}
-
-Label* LabelManager::Create64(GraphicContext* ctx, uint64_t* dst_gpu_addr, uint64_t value,
-                              LabelCallback callback_1, LabelCallback callback_2,
-                              const uint64_t* args) {
-	return Create(ctx, dst_gpu_addr, value, callback_1, callback_2, args);
-}
-
-Label* LabelManager::Create32(GraphicContext* ctx, uint32_t* dst_gpu_addr, uint32_t value,
-                              LabelCallback callback_1, LabelCallback callback_2,
-                              const uint64_t* args) {
-	return Create(ctx, dst_gpu_addr, value, callback_1, callback_2, args);
 }
 
 bool LabelManager::Remove(Label* label) {
@@ -336,28 +267,36 @@ void LabelManager::Set(CommandBuffer* buffer, Label* label) {
 	label->status = LabelStatus::Active;
 
 	LabelSubmission submission {};
-	submission.callbacks = label->callbacks;
-	submission.completion = std::make_shared<LabelEvent>();
+	submission.callbacks          = label->callbacks;
+	submission.completion         = std::make_shared<LabelEvent>();
 	submission.completion->device = label->device;
 
-	auto* vk_buffer = buffer->GetPool()->buffers[buffer->GetIndex()];
+	auto vk_buffer = buffer->Handle();
 
 	EXIT_NOT_IMPLEMENTED(vk_buffer == nullptr);
 
-	VkEventCreateInfo create_info {};
-	create_info.sType = VK_STRUCTURE_TYPE_EVENT_CREATE_INFO;
+	vk::EventCreateInfo create_info {};
+	create_info.sType = vk::StructureType::eEventCreateInfo;
 	create_info.pNext = nullptr;
-	create_info.flags = 0;
+	create_info.flags = {};
 
-	vkCreateEvent(label->device, &create_info, nullptr, &submission.completion->event);
-	EXIT_NOT_IMPLEMENTED(submission.completion->event == nullptr);
+	const auto create_result =
+	    label->device.createEvent(&create_info, nullptr, &submission.completion->event);
+	if (create_result != vk::Result::eSuccess || submission.completion->event == nullptr) {
+		EXIT("failed to create label event: %s (%d)\n", VulkanToString(create_result).c_str(),
+		     static_cast<int>(create_result));
+	}
 	buffer->RetainResourceUntilFence(submission.completion);
 
 	// Labels can be reused before an earlier end-of-pipe event has been
 	// observed by the polling thread. Capture a separate Vulkan event and
 	// callback snapshot for each set so older writes are not lost.
-	vkResetEvent(label->device, submission.completion->event);
-	vkCmdSetEvent(vk_buffer, submission.completion->event, VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT);
+	const auto reset_result = label->device.resetEvent(submission.completion->event);
+	if (reset_result != vk::Result::eSuccess) {
+		EXIT("failed to reset label event: %s (%d)\n", VulkanToString(reset_result).c_str(),
+		     static_cast<int>(reset_result));
+	}
+	vk_buffer.setEvent(submission.completion->event, vk::PipelineStageFlagBits::eBottomOfPipe);
 
 	label->submissions.push_back(submission);
 
@@ -385,18 +324,11 @@ void LabelInit() {
 	g_label_manager = new LabelManager;
 }
 
-Label* LabelCreate64(GraphicContext* ctx, uint64_t* dst_gpu_addr, uint64_t value,
-                     LabelCallback callback_1, LabelCallback callback_2, const uint64_t* args) {
+Label* LabelCreate(GraphicContext* ctx, LabelCallback callback_1, LabelCallback callback_2,
+                   const uint64_t* args) {
 	EXIT_IF(g_label_manager == nullptr);
 
-	return g_label_manager->Create64(ctx, dst_gpu_addr, value, callback_1, callback_2, args);
-}
-
-Label* LabelCreate32(GraphicContext* ctx, uint32_t* dst_gpu_addr, uint32_t value,
-                     LabelCallback callback_1, LabelCallback callback_2, const uint64_t* args) {
-	EXIT_IF(g_label_manager == nullptr);
-
-	return g_label_manager->Create32(ctx, dst_gpu_addr, value, callback_1, callback_2, args);
+	return g_label_manager->Create(ctx, callback_1, callback_2, args);
 }
 
 void LabelDelete(Label* label) {
@@ -414,15 +346,6 @@ void LabelSet(CommandBuffer* buffer, Label* label) {
 void LabelDrain() {
 	EXIT_IF(g_label_manager == nullptr);
 	g_label_manager->Drain();
-}
-
-void LabelWriteGuestMemory(void* address, const void* data, uint64_t size) {
-	if (address == nullptr || data == nullptr || size == 0) {
-		EXIT("invalid guest label write\n");
-	}
-	if (!Libs::LibKernel::Memory::TryWriteBacking(reinterpret_cast<uint64_t>(address), data, size)) {
-		std::memcpy(address, data, static_cast<size_t>(size));
-	}
 }
 
 bool LabelInCallback() noexcept {

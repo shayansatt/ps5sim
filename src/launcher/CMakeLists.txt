@@ -22,7 +22,7 @@ add_executable(launcher WIN32
 
 target_link_libraries(launcher Qt6::Concurrent Qt6::Network Qt6::Svg Qt6::Widgets)
 if(WIN32)
-target_link_libraries(launcher setupapi mfplay)
+target_link_libraries(launcher setupapi mfplay mfuuid)
 endif()
 if (CLANG AND NOT PS5SIM_CLANG_CL)
 target_link_libraries(launcher pthread)
@@ -48,6 +48,16 @@ if(EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/resources/boot_chime.mp3")
 			$<TARGET_FILE_DIR:launcher>/boot_chime.mp3
 	)
 	install(FILES "resources/boot_chime.mp3" DESTINATION .)
+endif()
+
+# Looping home-screen background music (toggle lives in Settings > Sound).
+if(EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/resources/home_music.mp3")
+	add_custom_command(TARGET launcher POST_BUILD
+		COMMAND ${CMAKE_COMMAND} -E copy_if_different
+			"${CMAKE_CURRENT_SOURCE_DIR}/resources/home_music.mp3"
+			$<TARGET_FILE_DIR:launcher>/home_music.mp3
+	)
+	install(FILES "resources/home_music.mp3" DESTINATION .)
 endif()
 
 if(WIN32 AND NOT PS5SIM_CLANG_CL)

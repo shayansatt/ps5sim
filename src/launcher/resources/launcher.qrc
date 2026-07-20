@@ -4,9 +4,15 @@
         <file>explore.svg</file>
         <file>library.svg</file>
         <file>psplus.svg</file>
+        <file alias="trophy_plat.png">trophy_plat_cut.png</file>
         <file alias="trophy_gold.png">trophy_gold_cut.png</file>
         <file alias="trophy_silver.png">trophy_silver_cut.png</file>
         <file alias="trophy_bronze.png">trophy_bronze_cut.png</file>
         <file>settings_bg.jpg</file>
+        <file>media_allapps.svg</file>
+        <file>media_gallery.png</file>
+        <file>media_applemusic.png</file>
+        <file>media_spotify.png</file>
+        <file>media_video.png</file>
     </qresource>
 </RCC>
